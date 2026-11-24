@@ -131,7 +131,7 @@ details summary{cursor:pointer;font-weight:700}
 
 <script>
 /* 部署 Apps Script 後，把下面的網址換成「網頁應用程式」網址（結尾是 /exec） */
-const API_URL_DEFAULT='https://script.google.com/macros/s/AKfycbzNaWkLQr4K5qdAtIvieGztV5va_iuuJe7iDUZ1EMT1gl3yJwB3inV-1ZQ2WB62l0Z9/exec';
+const API_URL_DEFAULT='';
 let API_URL=API_URL_DEFAULT;try{API_URL=API_URL_DEFAULT||localStorage.getItem('jcx-api')||''}catch(e){}
 const SHEETS=['餐具','器具'];
 const LS='jcx-order-v2',LSI='jcx-items-v2';
@@ -341,7 +341,7 @@ function iList(){const q=ui.iq.trim().toLowerCase();
 function vItems(){
   if(!DB){$('#main').innerHTML=`<div class="card empty">目前是本機模式，尚未連線後端，無法線上管理品項。<br>請依部署說明設定 API 網址。</div>`;return}
   const head=`<section class="card pad"><h2>品項管理</h2><p class="hint" style="margin-top:-4px">${CAN_ADMIN?'修改單價、品名、圖片後，所有分店會在 30 秒內同步看到。':'門市可新增品項；修改或刪除品項請洽總部。'}</p>
-  <div class="row"><button class="btn primary" id="addItem">新增品項</button>${CAN_ADMIN?'<button class="btn" id="importSeed">匯入初始品項</button>':''}<span class="hint">共 ${ITEMS.length} 項</span></div></section>`;
+  <div class="row"><button class="btn primary" id="addItem">新增品項</button>${CAN_ADMIN?'<button class="btn" id="importSeed">匯入初始品項</button><button class="btn" id="importLegacy">匯入舊資料</button>':''}<span class="hint">共 ${ITEMS.length} 項</span></div></section>`;
   if(!CAN_ADMIN){$('#main').innerHTML=head;return}
   const arr=iList();
   $('#main').innerHTML=head+`<div class="seg" id="iseg">${SHEETS.map(s=>`<button data-s="${s}" aria-pressed="${ui.isheet===s}">${s}</button>`).join('')}</div>
@@ -405,6 +405,13 @@ document.addEventListener('click',e=>{
   if(t.id==='addItem'){itemModal(null);return}
   const ed=t.closest('[data-edit]');if(ed){itemModal(byId(ed.dataset.edit));return}
   if(t.id==='iOff'){ui.iOff=!ui.iOff;vItems();return}
+  if(t.id==='importLegacy'){
+    t.disabled=true;t.textContent='匯入中…';
+    fetch('data/legacy.json').then(r=>r.json()).then(async j=>{
+      const a=await api('mergeItems',j.items),b=await api('importOrders',j.orders);
+      if(a&&a.ok&&b&&b.ok){toast(`已補入 ${a.added} 項品項、${b.added} 筆舊叫貨紀錄`+(b.added===0&&a.added===0?'（先前已匯入過）':''));await loadAll(true);t.disabled=false;t.textContent='匯入舊資料'}
+      else throw new Error('fail')}).catch(()=>{toast('匯入失敗，請確認網路後再試');t.disabled=false;t.textContent='匯入舊資料'});
+    return}
   if(t.id==='importSeed'){
     if(ITEMS.length&&!t.dataset.arm){t.dataset.arm=1;t.textContent='會覆蓋全部品項，再按一次確認';return}
     t.disabled=true;t.textContent='匯入中…';
