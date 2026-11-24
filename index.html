@@ -133,14 +133,14 @@ details summary{cursor:pointer;font-weight:700}
 
 <script>
 /* 部署 Apps Script 後，把下面的網址換成「網頁應用程式」網址（結尾是 /exec） */
-const API_URL_DEFAULT='https://script.google.com/macros/s/AKfycbzNaWkLQr4K5qdAtIvieGztV5va_iuuJe7iDUZ1EMT1gl3yJwB3inV-1ZQ2WB62l0Z9/exec';
+const API_URL_DEFAULT='';
 let API_URL=API_URL_DEFAULT;try{API_URL=API_URL_DEFAULT||localStorage.getItem('jcx-api')||''}catch(e){}
 const SHEETS=['餐具','器具'];
 const LS='jcx-order-v2',LSI='jcx-items-v2';
 const VIEWS=['order','cart','history','items','stores'];
 let S={store:{name:'',person:'',date:'',title:'',taxId:'',phone:'',address:'',tables:'',people:''},qty:{},note:'',history:[]};
 let ITEMS=[],ORDERS=[],STORES=[],VER='',DB=false,ROLE='',CAN_ADMIN=false,PIN='',pollT=null,editImg=null,saveT;
-let ui={sheet:'餐具',q:'',vendor:'',zone:'',onlySel:false,view:'order',isheet:'餐具',iq:'',iOff:false,sort:'date'};
+let ui={sheet:'餐具',q:'',vendor:'',zone:'',onlySel:false,view:'order',isheet:'餐具',iq:'',iOff:false,iHide:false,sort:'date'};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money=n=>'NT$ '+Math.round(n).toLocaleString('en-US');
@@ -153,7 +153,7 @@ function typing(){const a=document.activeElement;return !!a&&['INPUT','TEXTAREA'
 function setSync(t,k){const e=$('#syncSt');if(!e)return;e.textContent=t?'● '+t:'';e.className='sync'+(k?' '+k:'')}
 
 /* ---------- 資料 ---------- */
-const vis=()=>ITEMS.filter(i=>i.active!==false);
+const vis=()=>ITEMS.filter(i=>i.active!==false&&(CAN_ADMIN||i.storeOk!==false));
 const byId=id=>ITEMS.find(i=>i.id===id);
 const price=i=>+i.price||0;
 function imgSrc(i){return i&&i.img?i.img:''}
@@ -378,10 +378,10 @@ function vHistory(){
    <div class="row" style="margin-top:10px"><button class="btn sm" data-act="cp">複製文字</button><button class="btn sm" data-act="re">載入到叫貨單</button>${CAN_ADMIN||!DB?'<button class="btn sm" data-act="xl">下載 Excel</button>':''}${DB&&CAN_ADMIN?`<button class="btn sm" data-act="st">${o.status==='已處理'?'改回待處理':'標示已處理'}</button>`:''}${!DB||CAN_ADMIN?'<button class="btn sm danger" data-act="del">刪除</button>':''}</div></section>`).join('')
    :`<div class="card empty">還沒有叫貨單。<br>在「叫貨單」按「${DB?'送出叫貨單給總部':'儲存到紀錄並清空'}」後會出現在這裡。</div>`)}
 function iRow(i){return `<div class="item" data-iid="${esc(i.id)}" style="${i.active===false?'opacity:.55':''}">${thumbHTML(i)}
-  <div style="min-width:0"><div class="nm">${esc(i.name)}</div><div class="meta">${esc(i.spec)}${i.spec?'・':''}${esc(i.vendor)}${i.active===false?'・已停用':''}</div><div style="margin-top:4px"><button class="btn sm" data-edit="${esc(i.id)}">編輯</button></div></div>
+  <div style="min-width:0"><div class="nm">${esc(i.name)}</div><div class="meta">${esc(i.spec)}${i.spec?'・':''}${esc(i.vendor)}${i.active===false?'・已停用':''}</div><div style="margin-top:4px"><button class="btn sm" data-edit="${esc(i.id)}">編輯</button> <label class="hint" style="white-space:nowrap;margin-left:6px"><input type="checkbox" class="sok" ${i.storeOk===false?'':'checked'}> 門市可叫貨</label></div></div>
   <label class="f" style="width:88px">單價<input class="input pin num" type="number" min="0" step="any" inputmode="decimal" value="${price(i)}"></label></div>`}
 function iList(){const q=ui.iq.trim().toLowerCase();
-  return ITEMS.filter(i=>i.sheet===ui.isheet&&(!ui.iOff||i.active===false)&&(!q||[i.name,i.spec,i.vendor,i.meal].join(' ').toLowerCase().includes(q)))}
+  return ITEMS.filter(i=>i.sheet===ui.isheet&&(!ui.iOff||i.active===false)&&(!ui.iHide||i.storeOk===false)&&(!q||[i.name,i.spec,i.vendor,i.meal].join(' ').toLowerCase().includes(q)))}
 function vItems(){
   if(!DB){$('#main').innerHTML=`<div class="card empty">目前是本機模式，尚未連線後端，無法線上管理品項。<br>請依部署說明設定 API 網址。</div>`;return}
   const head=`<section class="card pad"><h2>品項管理</h2><p class="hint" style="margin-top:-4px">${CAN_ADMIN?'修改單價、品名、圖片後，所有分店會在 30 秒內同步看到。':'門市可新增品項；修改或刪除品項請洽總部。'}</p>
@@ -389,7 +389,8 @@ function vItems(){
   if(!CAN_ADMIN){$('#main').innerHTML=head;return}
   const arr=iList();
   $('#main').innerHTML=head+`<div class="seg" id="iseg">${SHEETS.map(s=>`<button data-s="${s}" aria-pressed="${ui.isheet===s}">${s}</button>`).join('')}</div>
-  <div class="row"><input class="input sp" id="iq" type="search" placeholder="搜尋品名、規格、廠商" value="${esc(ui.iq)}" style="min-width:160px"><button class="btn sm" id="iOff" aria-pressed="${ui.iOff}" style="${ui.iOff?'background:var(--ink);color:var(--bg)':''}">只看已停用</button></div>
+  <div class="row"><input class="input sp" id="iq" type="search" placeholder="搜尋品名、規格、廠商" value="${esc(ui.iq)}" style="min-width:160px"><button class="btn sm" id="iOff" aria-pressed="${ui.iOff}" style="${ui.iOff?'background:var(--ink);color:var(--bg)':''}">只看已停用</button><button class="btn sm" id="iHide" aria-pressed="${ui.iHide}" style="${ui.iHide?'background:var(--ink);color:var(--bg)':''}">只看門市不可叫</button></div>
+  <div class="row"><span class="hint">門市端可叫貨：目前清單（${arr.length} 項）</span><button class="btn sm" id="sokOn">全部開放</button><button class="btn sm" id="sokOff">全部隱藏</button><span class="hint">共 ${ITEMS.filter(i=>i.storeOk===false).length} 項隱藏中；總部自己仍看得到全部品項</span></div>
   <section class="card" id="ilist">${arr.length?arr.map(iRow).join(''):'<div class="empty">沒有符合的品項</div>'}</section>`}
 function itemModal(it){
   editImg=null;const n=!it,adm=CAN_ADMIN;it=it||{sheet:ui.isheet,vendor:'',name:'',spec:'',mat:'',meal:'',zone:'',price:'',sug:0,active:true,img:''};
@@ -408,6 +409,7 @@ function itemModal(it){
    <label class="f" style="grid-column:1/-1">物品圖片${it.img?'（不選檔案則保留原圖）':''}<input class="input" id="eImg" type="file" accept="image/*"></label>
   </div>
   <div class="row" id="ePrev">${it.img?`<img alt="" src="${esc(it.img)}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"><button class="btn sm" type="button" id="eNoImg">移除圖片</button>`:''}</div>
+  ${adm?`<label class="row" style="gap:8px"><input type="checkbox" id="eStoreOk" ${it.storeOk!==false?'checked':''}> 門市端可叫貨（取消勾選＝只有總部看得到）</label>`:''}
   ${adm&&!n?`<label class="row" style="gap:8px"><input type="checkbox" id="eActive" ${it.active!==false?'checked':''}> 啟用（取消勾選＝停用，叫貨頁不再顯示）</label>`:''}
   <div class="row"><button class="btn primary" type="submit">儲存</button><button class="btn" type="button" id="eCancel">取消</button><span class="sp"></span>${adm&&!n?'<button class="btn danger" type="button" id="eDel">刪除</button>':''}</div></form></div>`;
   $('#eCancel').onclick=()=>{$('#layer').innerHTML=''};
@@ -418,7 +420,7 @@ function itemModal(it){
   $('#itemF').onsubmit=async ev=>{ev.preventDefault();
     const o={id:n?'':it.id,sheet:$('#eSheet').value,vendor:$('#eVendor').value.trim(),name:$('#eName').value.trim(),spec:$('#eSpec').value.trim(),price:+$('#ePrice').value,
       mat:adm?$('#eMat').value.trim():it.mat,meal:adm?$('#eMeal').value.trim():it.meal,zone:adm?$('#eZone').value.trim():it.zone,sug:adm?+$('#eSug').value||0:0,
-      active:adm&&!n?$('#eActive').checked:true,img:editImg!==null?editImg:(it.img||'')};
+      active:adm&&!n?$('#eActive').checked:true,storeOk:adm?$('#eStoreOk').checked:true,img:editImg!==null?editImg:(it.img||'')};
     if(!o.name||!o.vendor||!(o.price>=0)){toast('請填廠商、品名與單價');return}
     try{const r=await api('saveItem',o);if(r&&r.ok){$('#layer').innerHTML='';toast(n?'已新增品項':'已儲存');await loadAll(true)}else toast(r&&r.error==='forbidden'?'沒有權限':'儲存失敗')}catch(e){toast('同步失敗，請稍後再試')}}}
 
@@ -590,6 +592,11 @@ document.addEventListener('click',e=>{
   if(t.id==='addItem'){itemModal(null);return}
   const ed=t.closest('[data-edit]');if(ed){itemModal(byId(ed.dataset.edit));return}
   if(t.id==='dlCatalog'){exportCatalog();return}
+  if(t.id==='sokOn'||t.id==='sokOff'){const on=t.id==='sokOn',arr=iList().filter(i=>(i.storeOk!==false)!==on);
+    if(!arr.length){toast(on?'目前清單都已開放':'目前清單都已隱藏');return}
+    if(!t.dataset.arm){t.dataset.arm=1;const o=t.textContent;t.textContent=`再按一次確認（${arr.length} 項）`;setTimeout(()=>{if(t.isConnected){delete t.dataset.arm;t.textContent=o}},3000);return}
+    t.disabled=true;api('setStoreOk',arr.map(i=>i.id),on).then(async r=>{if(r&&r.ok){toast(`已${on?'開放':'隱藏'} ${r.changed} 項給門市`);await loadAll(true)}else{t.disabled=false;toast('設定失敗')}}).catch(()=>{t.disabled=false;toast('同步失敗')});return}
+  if(t.id==='iHide'){ui.iHide=!ui.iHide;vItems();return}
   if(t.id==='iOff'){ui.iOff=!ui.iOff;vItems();return}
   if(t.id==='importLegacy'){
     const old=t.textContent;t.disabled=true;t.textContent='匯入中…';
@@ -629,6 +636,10 @@ document.addEventListener('input',e=>{
 document.addEventListener('change',e=>{
   const t=e.target;
   if(t.id==='stPick'){if(t.value)pickStore(t.value);return}
+  if(t.classList.contains('sok')){
+    if(!CAN_ADMIN)return;const it=byId(t.closest('[data-iid]').dataset.iid);if(!it)return;
+    const old=it.storeOk!==false;it.storeOk=t.checked;
+    api('setStoreOk',[it.id],t.checked).then(r=>{if(r&&r.ok){toast(t.checked?'門市可叫貨':'已對門市隱藏');loadAll(true)}else{it.storeOk=old;t.checked=old;toast('更新失敗')}}).catch(()=>{it.storeOk=old;t.checked=old;toast('同步失敗')});return}
   if(t.classList.contains('pin')){
     if(!CAN_ADMIN)return;const it=byId(t.closest('[data-iid]').dataset.iid);const v=t.value===''?NaN:+t.value;
     if(!it)return;if(!(v>=0)){t.value=price(it);return}if(v===price(it))return;
