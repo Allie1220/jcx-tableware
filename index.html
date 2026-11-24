@@ -133,7 +133,7 @@ details summary{cursor:pointer;font-weight:700}
 
 <script>
 /* 部署 Apps Script 後，把下面的網址換成「網頁應用程式」網址（結尾是 /exec） */
-const API_URL_DEFAULT='https://script.google.com/macros/s/AKfycbzNaWkLQr4K5qdAtIvieGztV5va_iuuJe7iDUZ1EMT1gl3yJwB3inV-1ZQ2WB62l0Z9/exec';
+const API_URL_DEFAULT='';
 let API_URL=API_URL_DEFAULT;try{API_URL=API_URL_DEFAULT||localStorage.getItem('jcx-api')||''}catch(e){}
 const SHEETS=['餐具','器具'];
 const LS='jcx-order-v2',LSI='jcx-items-v2';
@@ -375,7 +375,7 @@ function vHistory(){
    ${(()=>{const d=dayInfo(o.store.date);return d?`<div style="margin-top:3px"><b>期望到貨：${d.text}</b>${o.status!=='已處理'?` <span class="tag" style="${d.diff<0?'background:var(--accent-soft);color:var(--accent)':''}">${d.rel}</span>`:''}</div>`:'<div class="hint">期望到貨：未填</div>'})()}
    <div class="hint">${o.lines.length} 項・${new Set(o.lines.map(x=>x.vendor)).size} 家廠商${o.store.person?'・'+esc(o.store.person):''}${o.store.tables||o.store.people?'・'+esc(o.store.tables||'-')+' 桌／'+esc(o.store.people||'-')+' 人':''}</div>
    <details style="margin-top:8px"><summary class="hint">明細</summary><div class="meta" style="margin-top:6px">${o.lines.map(x=>`${esc(x.vendor)}｜${esc(x.name)}${x.spec?'（'+esc(x.spec)+'）':''} ×${x.q}`).join('<br>')}</div></details>
-   <div class="row" style="margin-top:10px"><button class="btn sm" data-act="cp">複製文字</button><button class="btn sm" data-act="re">載入到叫貨單</button>${CAN_ADMIN||!DB?'<button class="btn sm" data-act="xl">下載 Excel</button>':''}${DB&&CAN_ADMIN?`<button class="btn sm" data-act="st">${o.status==='已處理'?'改回待處理':'標示已處理'}</button>`:''}${!DB||CAN_ADMIN?'<button class="btn sm danger" data-act="del">刪除</button>':''}</div></section>`).join('')
+   <div class="row" style="margin-top:10px"><button class="btn sm" data-act="cp">複製文字</button><button class="btn sm" data-act="re">載入到叫貨單</button>${CAN_ADMIN||!DB?'<button class="btn sm" data-act="ed">修改內容</button>':''}${CAN_ADMIN||!DB?'<button class="btn sm" data-act="xl">下載 Excel</button>':''}${DB&&CAN_ADMIN?`<button class="btn sm" data-act="st">${o.status==='已處理'?'改回待處理':'標示已處理'}</button>`:''}${!DB||CAN_ADMIN?'<button class="btn sm danger" data-act="del">刪除</button>':''}</div></section>`).join('')
    :`<div class="card empty">還沒有叫貨單。<br>在「叫貨單」按「${DB?'送出叫貨單給總部':'儲存到紀錄並清空'}」後會出現在這裡。</div>`)}
 function iRow(i){return `<div class="item" data-iid="${esc(i.id)}" style="${i.active===false?'opacity:.55':''}">${thumbHTML(i)}
   <div style="min-width:0"><div class="nm">${esc(i.name)}</div><div class="meta">${esc(i.spec)}${i.spec?'・':''}${esc(i.vendor)}${i.active===false?'・已停用':''}</div><div style="margin-top:4px"><button class="btn sm" data-edit="${esc(i.id)}">編輯</button> <label class="hint" style="white-space:nowrap;margin-left:6px"><input type="checkbox" class="sok" ${i.storeOk===false?'':'checked'}> 門市可叫貨</label></div></div>
@@ -555,6 +555,51 @@ function storeModal(s){
     if(!o.name){toast('請填分店名稱');return}
     try{const r=await api('saveStore',o);if(r&&r.ok){$('#layer').innerHTML='';toast('已儲存門市');await loadAll()}else toast(r&&r.error==='exists'?'已有同名門市':'儲存失敗')}catch(e){if(e.message!=='auth')toast('同步失敗，請稍後再試')}}}
 
+
+/* ---------- 修改已送出的叫貨單 ---------- */
+function orderEditor(o){
+  const st={name:'',title:'',taxId:'',phone:'',address:'',tables:'',people:'',person:'',date:'',...(o.store||{})};
+  const L=(o.lines||[]).map(x=>({...x}));let note=o.note||'';
+  const fld=(k,lab,full,attr)=>`<label class="f" style="${full?'grid-column:1/-1':''}">${lab}<input class="input" data-ok="${k}" ${attr||''} value="${esc(st[k])}"></label>`;
+  let busy=false;
+  function paint(keepScroll){
+    busy=true;const ae=document.activeElement;if(ae&&ae.blur)ae.blur();
+    const sc=$('#oeBox')?$('#oeBox').scrollTop:0,tot=L.reduce((a,x)=>a+(+x.p||0)*(+x.q||0),0);
+    $('#layer').innerHTML=`<div class="modal"><div class="box" id="oeBox" style="max-height:94vh;overflow:auto;width:min(880px,100%)">
+     <div class="row"><b style="font-size:1.05rem">修改叫貨單</b><span class="sp"></span><span class="hint">叫貨時間與處理狀態不會改變</span></div>
+     <div class="grid">${fld('name','分店名稱')}${fld('title','分店抬頭（公司名稱）')}${fld('taxId','統一編號','','inputmode="numeric"')}${fld('phone','電話','','type="tel"')}
+      ${fld('address','地址',1)}${fld('tables','桌數')}${fld('people','人數（座位數）')}${fld('person','叫貨人')}
+      <label class="f">期望到貨日<input class="input" type="date" data-ok="date" value="${esc(st.date)}"></label>
+      <label class="f" style="grid-column:1/-1">備註<input class="input" id="oeNote" value="${esc(note)}"></label></div>
+     <div style="overflow-x:auto"><table class="oe" style="width:100%;border-collapse:collapse;font-size:.9rem;min-width:560px">
+      <thead><tr style="text-align:left;color:var(--muted)"><th>品項</th><th style="width:88px">單價</th><th style="width:78px">數量</th><th style="width:96px;text-align:right">小計</th><th style="width:40px"></th></tr></thead>
+      <tbody>${L.map((x,i)=>`<tr style="border-top:1px solid var(--line)"><td style="padding:6px 6px 6px 0"><b>${esc(x.name)}</b><div class="hint">${esc(x.vendor)}${x.spec?'・'+esc(x.spec):''}</div></td>
+       <td><input class="input" data-lp="${i}" type="number" step="any" min="0" value="${x.p}" style="width:80px"></td>
+       <td><input class="input" data-lq="${i}" type="number" min="1" step="1" value="${x.q}" style="width:70px"></td>
+       <td style="text-align:right" class="num">${money((+x.p||0)*(+x.q||0))}</td><td><button class="btn sm" type="button" data-ldel="${i}" title="移除此品項">✕</button></td></tr>`).join('')}</tbody></table></div>
+     <div class="row" style="margin-top:8px"><input class="input sp" id="oeAdd" list="oeDl" placeholder="輸入品名搜尋，加入品項…" autocomplete="off"><datalist id="oeDl">${ITEMS.filter(i=>i.active!==false).map(i=>`<option value="${esc(i.name+(i.spec?'｜'+i.spec:'')+'｜'+i.vendor)}">`).join('')}</datalist></div>
+     <div class="row" style="margin-top:10px"><b>合計 ${L.length} 項・${money(tot)}</b><span class="sp"></span><button class="btn" type="button" id="oeCancel">取消</button><button class="btn primary" type="button" id="oeSave">儲存修改</button></div></div></div>`;
+    if(keepScroll&&$('#oeBox'))$('#oeBox').scrollTop=sc;busy=false}
+  const grab=()=>{document.querySelectorAll('[data-ok]').forEach(e=>{st[e.dataset.ok]=e.value.trim()});const n=$('#oeNote');if(n)note=n.value};
+  paint();
+  const lay=$('#layer');
+  lay.onclick=e=>{const t=e.target;
+    if(t.id==='oeCancel'){lay.innerHTML='';lay.onclick=lay.onchange=null;return}
+    const d=t.closest('[data-ldel]');if(d){grab();L.splice(+d.dataset.ldel,1);paint(1);return}
+    if(t.id==='oeSave'){grab();
+      if(!st.name){toast('請填分店名稱');return}
+      const lines=L.filter(x=>Math.floor(+x.q)>0&&+x.p>=0).map(x=>({id:x.id,sheet:x.sheet,vendor:x.vendor,name:x.name,spec:x.spec,q:Math.floor(+x.q),p:+x.p}));
+      if(!lines.length){toast('至少要有一個品項');return}
+      t.disabled=true;
+      const total=lines.reduce((a,x)=>a+x.p*x.q,0);
+      if(DB){api('updateOrder',o.id,{store:st,note,lines}).then(async r=>{if(r&&r.ok){lay.innerHTML='';toast('已修改叫貨單');await loadAll(true)}else{t.disabled=false;toast(r&&r.error==='forbidden'?'需要總部密碼':'修改失敗')}}).catch(e=>{t.disabled=false;if(e.message!=='auth')toast('同步失敗，請稍後再試')})}
+      else{Object.assign(o,{store:st,note,lines,total});save();lsSave();lay.innerHTML='';toast('已修改');vHistory()}}};
+  lay.onchange=e=>{const t=e.target;if(busy)return;
+    if(t.dataset.lp!==undefined){grab();L[+t.dataset.lp].p=Math.max(0,+t.value||0);paint(1)}
+    else if(t.dataset.lq!==undefined){grab();L[+t.dataset.lq].q=Math.max(1,Math.floor(+t.value)||1);paint(1)}
+    else if(t.id==='oeAdd'){const v=t.value,it=ITEMS.find(i=>i.name+(i.spec?'｜'+i.spec:'')+'｜'+i.vendor===v);
+      if(it){grab();const ex=L.find(x=>x.id===it.id);if(ex)ex.q=(+ex.q||0)+1;else L.push({id:it.id,sheet:it.sheet,vendor:it.vendor,name:it.name,spec:it.spec,q:1,p:price(it)});paint(1);const a=$('#oeAdd');if(a)a.focus()}}}}
+
 /* ---------- 事件 ---------- */
 document.addEventListener('click',e=>{
   const t=e.target;
@@ -577,6 +622,7 @@ document.addEventListener('click',e=>{
     if(ha.dataset.act==='cp')copy(orderText(o.lines,{...o.store,note:o.note}),'已複製');
     if(ha.dataset.act==='re'){S.store={...S.store,...o.store};S.qty={};o.lines.forEach(x=>{if(byId(x.id))S.qty[x.id]=x.q});S.note=o.note||'';save();toast('已載入');setView('cart')}
     if(ha.dataset.act==='xl')exportOrder(o);
+    if(ha.dataset.act==='ed'){orderEditor(o);return}
     if(ha.dataset.act==='st'){toggleStatus(o)}
     if(ha.dataset.act==='del'){if(ha.dataset.arm){delOrder(o)}else{ha.dataset.arm=1;ha.textContent='再按一次刪除';setTimeout(()=>{if(ha.isConnected){delete ha.dataset.arm;ha.textContent='刪除'}},2500)}}return}
   if(t.id==='upLocal'){t.disabled=true;t.textContent='上傳中…';
@@ -601,8 +647,11 @@ document.addEventListener('click',e=>{
   if(t.id==='importLegacy'){
     const old=t.textContent;t.disabled=true;t.textContent='匯入中…';
     (async()=>{try{
-      const j=await loadJSON('data/legacy.json');
-      const a=need(await api('mergeItems',j.items),'補入品項'),b=need(await api('importOrders',j.orders),'匯入舊叫貨紀錄');
+      const j=await loadJSON('data/legacy.json');let j2={items:[],orders:[]};try{j2=await loadJSON('data/legacy2.json')}catch(e){}
+      const a=need(await api('mergeItems',[...j.items,...j2.items]),'補入品項'),b=need(await api('importOrders',[...j.orders,...j2.orders]),'匯入舊叫貨紀錄');
+      {const sm=new Map();[...j.orders,...j2.orders].forEach(o=>{const s=o.store||{};if(s.name&&!sm.has(s.name))sm.set(s.name,{name:s.name,tables:s.tables||'',people:s.people||'',title:s.title||'',taxId:s.taxId||'',phone:s.phone||'',address:s.address||''})});
+       (j2.stores||[]).forEach(s=>{if(!sm.has(s.name))sm.set(s.name,s)});
+       try{await api('mergeStores',[...sm.values()])}catch(e){}}
       toast(`已補入 ${a.added} 項品項、${b.added} 筆舊叫貨紀錄`+(b.added===0&&a.added===0?'（先前已匯入過）':''),4000);await loadAll(true);
     }catch(e){toast(explain(e,'匯入舊資料'),9000)}finally{t.disabled=false;t.textContent='匯入舊資料'}})();
     return}
