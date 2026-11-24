@@ -93,6 +93,7 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--m
 .modal textarea{height:50vh;font-family:ui-monospace,monospace;font-size:.85rem}
 details summary{cursor:pointer;font-weight:700}
 .hint{font-size:.82rem;color:var(--muted)}
+.sync{font-size:.78rem;padding:2px 9px;border-radius:99px;background:var(--chip);color:var(--muted);white-space:nowrap}.sync:empty{display:none}.sync.ok{color:var(--ok);background:var(--ok-soft)}.sync.err{color:var(--accent);background:var(--accent-soft)}
 .pill-ok{color:var(--ok);background:var(--ok-soft);padding:1px 8px;border-radius:99px;font-size:.75rem}
 @media(max-width:420px){.item{grid-template-columns:52px minmax(0,1fr)}.thumb{width:52px;height:52px}.item .right{grid-column:1/-1;flex-direction:row;justify-content:space-between;align-items:center}}
 /* 網頁版：寬螢幕改成雙欄清單 */
@@ -113,13 +114,12 @@ details summary{cursor:pointer;font-weight:700}
 
 </head><body>
 <header><div class="head">
-  <div class="brand"><b>金春喜韓廚</b><span>餐器具叫貨</span><span class="sp"></span><span class="hint" id="syncSt"></span><button class="btn sm" id="logout" hidden>登出</button></div>
+  <div class="brand"><b>金春喜韓廚</b><span>餐器具叫貨</span><span class="sp"></span><span class="sync" id="syncSt"></span><button class="btn sm" id="logout" hidden>登出</button></div>
   <nav id="nav">
     <button data-v="order">叫貨</button>
     <button data-v="cart">叫貨單<span class="n" id="navN"></span></button>
-    <button data-v="prices">單價</button>
     <button data-v="history">紀錄</button>
-    <button data-v="manage">自訂</button>
+    <button data-v="items">品項</button>
   </nav>
 </div></header>
 <div class="wrap"><main id="main"><div class="empty">載入品項資料中…</div></main></div>
@@ -131,22 +131,59 @@ details summary{cursor:pointer;font-weight:700}
 
 <script>
 /* 部署 Apps Script 後，把下面的網址換成「網頁應用程式」網址（結尾是 /exec） */
-const API_URL='https://script.google.com/macros/s/AKfycbw-ot7pbwAV4eDNWjnTL58arZJU-3tiwSPVFspMpY-nqUAP8s-WQcihE5CMVdBz70O3/exec';
+const API_URL_DEFAULT='';
+let API_URL=API_URL_DEFAULT;try{API_URL=API_URL_DEFAULT||localStorage.getItem('jcx-api')||''}catch(e){}
 const SHEETS=['餐具','器具'];
-const TPL={hsinchu:'電磁爐店',puli:'瓦斯店'};
-const EXAMPLE={hsinchu:'新竹忠孝店',puli:'埔里萬家福店'};
-const LS='jcx-order-v1';
-let ITEMS=[],IMGS={},S={store:{name:'',person:'',type:'hsinchu',date:'',title:'',taxId:'',phone:'',address:'',tables:'',people:''},qty:{},note:'',history:[],custom:[],prices:{puli:{},hsinchu:{}}};
-let ui={sheet:'餐具',q:'',vendor:'',zone:'',onlySel:false,view:'order',ptype:'',psheet:'餐具',pq:'',pOnly:false};
-const VIEWS=['order','cart','prices','history','manage'];
-let pendingImg='';
+const LS='jcx-order-v2',LSI='jcx-items-v2';
+const VIEWS=['order','cart','history','items'];
+let S={store:{name:'',person:'',date:'',title:'',taxId:'',phone:'',address:'',tables:'',people:''},qty:{},note:'',history:[]};
+let ITEMS=[],ORDERS=[],VER='',DB=false,ROLE='',CAN_ADMIN=false,PIN='',pollT=null,editImg=null,saveT;
+let ui={sheet:'餐具',q:'',vendor:'',zone:'',onlySel:false,view:'order',isheet:'餐具',iq:'',iOff:false};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money=n=>'NT$ '+Math.round(n).toLocaleString('en-US');
-function load(){try{const j=JSON.parse(localStorage.getItem(LS)||'null');if(j)S=Object.assign(S,j);}catch(e){}}
-let saveT,pricePending=false,priceT,pollT=null;
-let DB=false,ROLE='',CAN_ADMIN=false,ORDERS=[],PIN='';
-const GAS=!!API_URL;
+function load(){try{let raw=localStorage.getItem(LS);if(!raw){raw=localStorage.getItem('jcx-order-v1');if(raw){try{const o=JSON.parse(raw);delete o.prices;delete o.custom;delete o.store.type;raw=JSON.stringify(o)}catch(e){}}}const j=JSON.parse(raw||'null');if(j){S=Object.assign(S,j);S.store=Object.assign({name:'',person:'',date:'',title:'',taxId:'',phone:'',address:'',tables:'',people:''},S.store)}}catch(e){}}
+function lsSave(){try{localStorage.setItem(LS,JSON.stringify(S))}catch(e){}}
+function save(){clearTimeout(saveT);saveT=setTimeout(lsSave,200)}
+function cacheItems(){try{localStorage.setItem(LSI,JSON.stringify({ver:VER,items:ITEMS}))}catch(e){}}
+function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),1800)}
+function typing(){const a=document.activeElement;return !!a&&['INPUT','TEXTAREA','SELECT'].includes(a.tagName)}
+function setSync(t,k){const e=$('#syncSt');if(!e)return;e.textContent=t?'● '+t:'';e.className='sync'+(k?' '+k:'')}
+
+/* ---------- 資料 ---------- */
+const vis=()=>ITEMS.filter(i=>i.active!==false);
+const byId=id=>ITEMS.find(i=>i.id===id);
+const price=i=>+i.price||0;
+function imgSrc(i){return i&&i.img?i.img:''}
+function thumbHTML(i){const u=imgSrc(i);return u?`<button class="thumb" data-zoom="${esc(i.id)}" aria-label="放大 ${esc(i.name)}"><img alt="" loading="lazy" src="${esc(u)}"></button>`:`<div class="thumb none">無圖</div>`}
+function resizeImg(file){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>{const im=new Image();im.onload=()=>{const m=200,k=Math.min(1,m/Math.max(im.width,im.height));const c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',.7))};im.onerror=rej;im.src=fr.result};fr.onerror=rej;fr.readAsDataURL(file)})}
+function cart(){const out=[];for(const i of vis()){const q=+S.qty[i.id]||0;if(q>0)out.push({i,q,p:price(i)})}return out}
+const total=c=>c.reduce((a,x)=>a+x.p*x.q,0);
+function lines(){return cart().map(({i,q,p})=>({id:i.id,sheet:i.sheet,vendor:i.vendor,name:i.name,spec:i.spec,q,p}))}
+const meta=()=>({...S.store,note:S.note});
+function orderText(L,m,only){
+  const g={};L.forEach(x=>(g[x.vendor]=g[x.vendor]||[]).push(x));
+  const vs=only?[only]:Object.keys(g);
+  let s=`【金春喜韓廚 ${m.name||'（未填門市）'} 叫貨單】\n`;
+  if(m.title)s+=`抬頭：${m.title}\n`;
+  if(m.taxId)s+=`統編：${m.taxId}\n`;
+  if(m.phone)s+=`電話：${m.phone}\n`;
+  if(m.address)s+=`地址：${m.address}\n`;
+  if(m.tables||m.people)s+=`桌數／人數：${m.tables||'-'} 桌／${m.people||'-'} 人\n`;
+  if(m.person)s+=`叫貨人：${m.person}\n`;
+  if(m.date)s+=`期望到貨：${m.date}\n`;
+  let all=0;
+  for(const v of vs){const a=g[v]||[];let sub=0;s+=`\n■ ${v}\n`;a.forEach((x,k)=>{s+=`${k+1}. ${x.name}${x.spec?'（'+x.spec+'）':''} ×${x.q}　@${x.p}　= ${Math.round(x.p*x.q).toLocaleString('en-US')}\n`;sub+=x.p*x.q});s+=`${v} 小計：${money(sub)}\n`;all+=sub}
+  s+=`\n${only?'小計':'總計'}：${money(all)}`;
+  if(m.note)s+=`\n備註：${m.note}`;
+  return s}
+function sheetText(L){return ['廠商\t類別\t品名\t規格\t單價\t數量\t小計'].concat(L.map(x=>[x.vendor,x.sheet,x.name.replace(/\t/g,' '),x.spec,x.p,x.q,x.p*x.q].join('\t'))).join('\n')}
+async function copy(text,msg){
+  try{await navigator.clipboard.writeText(text);toast(msg||'已複製');return}catch(e){}
+  const l=$('#layer');l.innerHTML=`<div class="modal"><div class="box"><b>請長按全選後複製</b><textarea class="input" id="cpTa" readonly>${esc(text)}</textarea><button class="btn primary" id="cpX">關閉</button></div></div>`;
+  const ta=$('#cpTa');ta.focus();ta.select();$('#cpX').onclick=()=>l.innerHTML=''}
+
+/* ---------- 後端 ---------- */
 function api(name,...args){
   if(!API_URL)return Promise.reject(new Error('no-backend'));
   return fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({fn:name,args:[PIN,...args]})})
@@ -154,26 +191,18 @@ function api(name,...args){
       if(r&&r.error==='auth'){logout('密碼已失效，請重新登入');throw new Error('auth')}
       if(r&&r.error==='server')throw new Error('server');
       return r})}
-function lsSave(){try{localStorage.setItem(LS,JSON.stringify(S))}catch(e){}}
-function save(){S._ts=Date.now();clearTimeout(saveT);saveT=setTimeout(lsSave,200)}
-function typing(){const a=document.activeElement;return !!a&&['INPUT','TEXTAREA','SELECT'].includes(a.tagName)}
-function setSync(t){const e=$('#syncSt');if(e)e.textContent=t}
-function refreshRemote(){
-  if(typing()){updateBar();return}
-  if(ui.view==='order')drawList();else if(ui.view==='prices')vPrices();else if(ui.view==='manage')vManage();else if(ui.view==='cart')vCart();else if(ui.view==='history')vHistory();
-  updateBar()}
-async function loadAll(){
+async function loadAll(force){
   try{
-    const r=await api('bootstrap');
-    if(!pricePending&&r.prices)S.prices={puli:{...(r.prices.puli||{})},hsinchu:{...(r.prices.hsinchu||{})}};
-    S.custom=r.custom||[];ORDERS=r.orders||[];lsSave();
-    setSync('已同步・'+(ROLE==='hq'?'總部':'門市'));refreshRemote();
-  }catch(e){if(e.message!=='auth')setSync('同步失敗，稍後自動重試')}}
+    const r=await api('bootstrap',force?'':VER);
+    if(r.items){ITEMS=r.items;VER=r.ver;cacheItems()}
+    ORDERS=r.orders||[];
+    {const d=new Date();setSync('已同步 '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+'・'+(ROLE==='hq'?'總部':'門市'),'ok')}refreshRemote();
+  }catch(e){if(e.message!=='auth')setSync('同步失敗，稍後自動重試','err')}}
+function refreshRemote(){
+  if(typing()||$('.modal')){updateBar();return}
+  render()}
 function startPoll(){clearInterval(pollT);pollT=setInterval(()=>{if(!document.hidden&&DB)loadAll()},30000)}
-function histList(){return DB?ORDERS:S.history}
-function pushPrices(){
-  if(!DB||!CAN_ADMIN)return;pricePending=true;clearTimeout(priceT);
-  priceT=setTimeout(async()=>{try{await api('setPrices',{puli:S.prices.puli||{},hsinchu:S.prices.hsinchu||{}})}catch(e){toast('單價同步失敗')}pricePending=false},800)}
+const histList=()=>DB?ORDERS:S.history;
 async function submitOrder(){
   const L=lines();if(!L.length)return;
   const o={ts:Date.now(),store:{...S.store},note:S.note,lines:L,total:L.reduce((a,x)=>a+x.p*x.q,0),status:'待處理'};
@@ -183,11 +212,24 @@ async function submitOrder(){
   if(DB)await loadAll();setView('history')}
 async function delOrder(o){if(DB){try{await api('deleteOrder',o.id);await loadAll()}catch(e){toast('刪除失敗')}}else{S.history=S.history.filter(x=>x!==o);save();vHistory()}}
 async function toggleStatus(o){try{await api('setStatus',o.id,o.status==='已處理'?'待處理':'已處理');await loadAll()}catch(e){toast('更新失敗')}}
+function setupUI(msg){
+  $('#layer').innerHTML=`<div class="modal"><form class="box" id="setupF"><b style="font-size:1.1rem">連線設定</b>
+  <span class="hint">請貼上 Apps Script「網頁應用程式」網址（https://script.google.com/macros/s/…/exec）。設定一次後，這台裝置會記住。</span>
+  <input class="input" id="apiIn" type="url" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(API_URL)}" required>
+  <div class="hint" id="setupMsg" style="color:var(--accent);min-height:1.2em">${esc(msg||'')}</div>
+  <button class="btn primary" type="submit">儲存並前往登入</button>
+  <button class="btn" type="button" id="localGo">先不連線，單機試用</button></form></div>`;
+  $('#setupF').onsubmit=ev=>{ev.preventDefault();const u=$('#apiIn').value.trim();
+    if(!/^https:\/\/script\.google\.com\/.+\/exec$/.test(u)&&!/^https:\/\/script\.googleusercontent\.com\//.test(u)){$('#setupMsg').textContent='網址格式不正確，結尾應是 /exec';return}
+    try{localStorage.setItem('jcx-api',u);localStorage.removeItem('jcx-local')}catch(e){}
+    API_URL=u;$('#layer').innerHTML='';boot()};
+  $('#localGo').onclick=()=>{try{localStorage.setItem('jcx-local','1')}catch(e){}$('#layer').innerHTML='';boot()}}
 function loginUI(msg){
   $('#layer').innerHTML=`<div class="modal"><form class="box" id="loginF"><b style="font-size:1.1rem">金春喜餐器具叫貨</b><span class="hint">請輸入密碼（門市或總部）</span>
   <input class="input" id="pinIn" type="password" autocomplete="current-password" placeholder="密碼" required>
   <div class="hint" id="loginMsg" style="color:var(--accent);min-height:1.2em">${esc(msg||'')}</div>
-  <button class="btn primary" type="submit">登入</button></form></div>`;
+  <button class="btn primary" type="submit">登入</button>${API_URL_DEFAULT?'':'<button class="btn" type="button" id="chgApi">變更後端網址</button>'}</form></div>`;
+  const ca=$('#chgApi');if(ca)ca.onclick=()=>setupUI();
   $('#loginF').onsubmit=async ev=>{ev.preventDefault();const p=$('#pinIn').value.trim();if(!p)return;
     $('#loginMsg').textContent='登入中…';
     const ok=await tryLogin(p);if(!ok){$('#loginMsg').textContent='密碼錯誤或無法連線，請再試一次';$('#pinIn').select()}};
@@ -199,6 +241,7 @@ async function tryLogin(p){
     if(!r||!r.role){PIN='';return false}
     ROLE=r.role;CAN_ADMIN=ROLE==='hq';DB=true;
     try{sessionStorage.setItem('jcx-pin',p)}catch(e){}
+    try{const c=JSON.parse(localStorage.getItem(LSI)||'null');if(c&&c.items){ITEMS=c.items;VER=c.ver}}catch(e){}
     $('#layer').innerHTML='';$('#logout').hidden=false;setSync('同步中…');
     render();await loadAll();startPoll();return true;
   }catch(e){PIN='';return false}}
@@ -206,62 +249,25 @@ function logout(msg){
   try{sessionStorage.removeItem('jcx-pin')}catch(e){}
   clearInterval(pollT);PIN='';DB=false;ROLE='';CAN_ADMIN=false;ORDERS=[];$('#logout').hidden=true;setSync('');loginUI(msg||'')}
 async function boot(){
-  if(!GAS){setSync('本機模式（未同步）');return}
+  if(!API_URL){
+    let local=false;try{local=localStorage.getItem('jcx-local')==='1'}catch(e){}
+    if(local){setSync('本機模式（未同步）','err');try{ITEMS=(await fetch('data/seed.json').then(r=>r.json())).items;render()}catch(e){}return}
+    setupUI();return}
   let p='';try{p=sessionStorage.getItem('jcx-pin')||''}catch(e){}
   if(p&&await tryLogin(p))return;
   loginUI('')}
-function allItems(){return ITEMS.concat(S.custom.map(c=>({...c,t:{puli:{p:c.price,q:0},hsinchu:{p:c.price,q:0}}})))}
-function vis(){const t=S.store.type;return allItems().filter(i=>i.t[t])}
-const byId=id=>allItems().find(i=>i.id===id);
-function baseP(i,t){return i.t[t]?.p||0}
-function price(i){const o=S.prices&&S.prices[S.store.type]&&S.prices[S.store.type][i.id];return o!=null?o:baseP(i,S.store.type)}
-function imgSrc(i){return i.img||(IMGS[i.id]?'data:image/webp;base64,'+IMGS[i.id]:'')}
-function thumbHTML(i){const u=imgSrc(i);return u?`<button class="thumb" data-zoom="${i.id}" aria-label="放大 ${esc(i.name)}"><img alt="" loading="lazy" src="${u}"></button>`:`<div class="thumb none">無圖</div>`}
-function resizeImg(file){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>{const im=new Image();im.onload=()=>{const m=200,k=Math.min(1,m/Math.max(im.width,im.height));const c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',.7))};im.onerror=rej;im.src=fr.result};fr.onerror=rej;fr.readAsDataURL(file)})}
-function cart(){const out=[];for(const i of vis()){const q=+S.qty[i.id]||0;if(q>0)out.push({i,q,p:price(i)})}return out}
-function total(c){return c.reduce((a,x)=>a+x.p*x.q,0)}
-function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),1800)}
-function fmtLine(n,x,i){return `${i}. ${x.name}${x.spec?'（'+x.spec+'）':''} ×${x.q}　@${x.p}　= ${Math.round(x.p*x.q).toLocaleString('en-US')}`}
-function orderText(lines,meta,only){
-  const g={};lines.forEach(x=>(g[x.vendor]=g[x.vendor]||[]).push(x));
-  const vs=only?[only]:Object.keys(g);
-  let s=`【金春喜韓廚 ${meta.name||'（未填門市）'} 叫貨單】\n`;
-  if(meta.title)s+=`抬頭：${meta.title}\n`;
-  if(meta.taxId)s+=`統編：${meta.taxId}\n`;
-  if(meta.phone)s+=`電話：${meta.phone}\n`;
-  if(meta.address)s+=`地址：${meta.address}\n`;
-  if(meta.tables||meta.people)s+=`桌數／人數：${meta.tables||'-'} 桌／${meta.people||'-'} 人\n`;
-  if(meta.person)s+=`叫貨人：${meta.person}\n`;
-  if(meta.date)s+=`期望到貨：${meta.date}\n`;
-  s+=`店型：${TPL[meta.type]}\n`;
-  let all=0;
-  for(const v of vs){const a=g[v]||[];let sub=0;s+=`\n■ ${v}\n`;a.forEach((x,k)=>{s+=fmtLine(0,x,k+1)+'\n';sub+=x.p*x.q});s+=`${v} 小計：${money(sub)}\n`;all+=sub}
-  s+=`\n${only?'小計':'總計'}：${money(all)}`;
-  if(meta.note)s+=`\n備註：${meta.note}`;
-  return s}
-function sheetText(lines){return ['廠商\t類別\t品名\t規格\t單價\t數量\t小計'].concat(lines.map(x=>[x.vendor,x.sheet,x.name.replace(/\t/g,' '),x.spec,x.p,x.q,x.p*x.q].join('\t'))).join('\n')}
-async function copy(text,msg){
-  try{await navigator.clipboard.writeText(text);toast(msg||'已複製');return}catch(e){}
-  const l=$('#layer');l.innerHTML=`<div class="modal"><div class="box"><b>請長按全選後複製</b><textarea class="input" id="cpTa" readonly>${esc(text)}</textarea><button class="btn primary" id="cpX">關閉</button></div></div>`;
-  const ta=$('#cpTa');ta.focus();ta.select();$('#cpX').onclick=()=>l.innerHTML=''}
-function lines(){return cart().map(({i,q,p})=>({id:i.id,sheet:i.sheet,vendor:i.vendor,name:i.name,spec:i.spec,q,p}))}
-function meta(){return{...S.store,note:S.note}}
 
-/* ---------- views ---------- */
+/* ---------- 畫面 ---------- */
 function setView(v){ui.view=v;location.hash=v;render()}
 function render(){
   document.querySelectorAll('#nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.v===ui.view?'page':'false'));
-  const c=cart();$('#navN').textContent=c.length||'';
   $('#bar').hidden=!(ui.view==='order');
-  ({order:vOrder,cart:vCart,prices:vPrices,history:vHistory,manage:vManage})[ui.view]();
-  updateBar();
-}
+  ({order:vOrder,cart:vCart,history:vHistory,items:vItems})[ui.view]();
+  updateBar()}
 function updateBar(){const c=cart();$('#barTot').textContent=money(total(c));$('#barSub').textContent=c.length?`已選 ${c.length} 項・${new Set(c.map(x=>x.i.vendor)).size} 家廠商`:'尚未選取品項';$('#navN').textContent=c.length||''}
-
-function storeCard(){
-  const s=S.store;
+function storeCard(){const s=S.store;
   return `<section class="card pad"><h2>門市資料</h2><div class="grid">
-   <label class="f">分店名稱<input class="input" id="stName" placeholder="例如：${EXAMPLE[s.type]}" value="${esc(s.name)}"></label>
+   <label class="f">分店名稱<input class="input" id="stName" placeholder="例如：新竹忠孝店" value="${esc(s.name)}"></label>
    <label class="f">分店抬頭（公司名稱）<input class="input" id="stTitle" value="${esc(s.title)}"></label>
    <label class="f">統一編號<input class="input" id="stTax" inputmode="numeric" maxlength="8" value="${esc(s.taxId)}"></label>
    <label class="f">電話<input class="input" id="stPhone" type="tel" value="${esc(s.phone)}"></label>
@@ -270,9 +276,7 @@ function storeCard(){
    <label class="f">人數（座位數）<input class="input" id="stPeople" type="number" min="0" inputmode="numeric" value="${esc(s.people)}"></label>
    <label class="f">叫貨人<input class="input" id="stPerson" value="${esc(s.person)}"></label>
    <label class="f">期望到貨日<input class="input" type="date" id="stDate" value="${esc(s.date)}"></label>
-   <label class="f">店型（電磁爐／瓦斯）<select class="input" id="stType">${Object.entries(TPL).map(([k,v])=>`<option value="${k}" ${s.type===k?'selected':''}>${v}</option>`).join('')}</select></label>
-  </div><p class="hint" style="margin:10px 0 0">店型範例：埔里萬家福店為瓦斯店，新竹忠孝店為電磁爐店。選店型會帶入該店型的品項與單價。</p></section>`}
-
+  </div></section>`}
 function vOrder(){
   const list=vis(),cnt={};SHEETS.forEach(s=>cnt[s]=0);
   list.forEach(i=>{if((+S.qty[i.id]||0)>0)cnt[i.sheet]++});
@@ -285,22 +289,20 @@ function vOrder(){
     <select class="input" id="zone" style="width:auto"><option value="">全部存放區</option>${zones.map(z=>`<option ${ui.zone===z?'selected':''}>${esc(z)}</option>`).join('')}</select></div>
   <div class="chips" id="vchips"><button data-v="" aria-pressed="${!ui.vendor}">全部廠商</button>${vendors.map(v=>`<button data-v="${esc(v)}" aria-pressed="${ui.vendor===v}">${esc(v)}</button>`).join('')}
     <button id="onlySel" aria-pressed="${ui.onlySel}">只看已選</button></div>
-  <div class="row"><button class="btn sm" id="applyTpl">帶入建議開店數量</button><button class="btn sm danger" id="clearAll">清空數量</button><span class="hint" id="shown"></span></div>
+  <div class="row"><button class="btn sm" id="applyTpl">帶入建議數量</button><button class="btn sm danger" id="clearAll">清空數量</button><span class="hint" id="shown"></span></div>
   <section class="card" id="list"></section>`;
-  drawList();
-}
+  drawList()}
 function drawList(){
-  const t=S.store.type,q=ui.q.trim().toLowerCase();
+  const q=ui.q.trim().toLowerCase();
   const arr=vis().filter(i=>i.sheet===ui.sheet&&(!ui.vendor||i.vendor===ui.vendor)&&(!ui.zone||i.zone===ui.zone)
     &&(!ui.onlySel||(+S.qty[i.id]||0)>0)&&(!q||[i.name,i.spec,i.meal,i.mat,i.zone,i.vendor].join(' ').toLowerCase().includes(q)));
   $('#shown').textContent=`顯示 ${arr.length} 項`;
-  $('#list').innerHTML=arr.length?arr.map(itemHTML).join(''):`<div class="empty">沒有符合的品項</div>`;
-}
+  const none=!ITEMS.length?(DB?(CAN_ADMIN?'尚未建立品項，請到「品項」分頁按「匯入初始品項」。':'品項尚未建立，請通知總部匯入品項。'):'載入品項中…'):'沒有符合的品項';
+  $('#list').innerHTML=arr.length?arr.map(itemHTML).join(''):`<div class="empty">${none}</div>`}
 function itemHTML(i){
-  const q=+S.qty[i.id]||0,p=price(i),sug=i.t[S.store.type].q;
-  const img=thumbHTML(i);
+  const q=+S.qty[i.id]||0,p=price(i),sug=i.sug;
   const tags=[i.mat,i.meal,i.zone].filter(Boolean).map(x=>`<span class="tag">${esc(x)}</span>`).join('');
-  return `<div class="item ${q?'on':''}" data-id="${i.id}">${img}
+  return `<div class="item ${q?'on':''}" data-id="${esc(i.id)}">${thumbHTML(i)}
    <div style="min-width:0"><div class="nm">${esc(i.name)}</div><div class="meta">${esc(i.spec)}${i.spec?'・':''}${esc(i.vendor)}</div><div style="margin-top:3px">${tags}</div></div>
    <div class="right"><div class="price"><b class="num">${money(p)}</b>${sug?` ・建議 ${sug}`:''}</div>
     <div class="step"><button data-d="-1" aria-label="減少">−</button><input inputmode="numeric" type="number" min="0" value="${q||''}" placeholder="0" aria-label="數量"><button data-d="1" aria-label="增加">+</button></div>
@@ -309,130 +311,133 @@ function setQty(id,q,card){
   q=Math.max(0,Math.floor(+q||0));if(q)S.qty[id]=q;else delete S.qty[id];save();
   if(card){const i=byId(id);card.classList.toggle('on',q>0);card.querySelector('input').value=q||'';card.querySelector('.lt').textContent=q?money(price(i)*q):''}
   updateBar();
-  if(ui.view==='order'){const l=vis();SHEETS.forEach(s=>{const n=l.filter(i=>i.sheet===s&&(+S.qty[i.id]||0)>0).length;const b=document.querySelector(`#seg [data-s="${s}"] .c`);if(b)b.textContent=n||''})}
-}
-
+  if(ui.view==='order'){const l=vis();SHEETS.forEach(s=>{const n=l.filter(i=>i.sheet===s&&(+S.qty[i.id]||0)>0).length;const b=document.querySelector(`#seg [data-s="${s}"] .c`);if(b)b.textContent=n||''})}}
 function vCart(){
   const L=lines();
   if(!L.length){$('#main').innerHTML=`<div class="card empty">叫貨單是空的。<br><br><button class="btn primary" id="toOrder">回到叫貨選品項</button></div>`;$('#toOrder').onclick=()=>setView('order');return}
   const g={};L.forEach(x=>(g[x.vendor]=g[x.vendor]||[]).push(x));
   const all=L.reduce((a,x)=>a+x.p*x.q,0);
-  $('#main').innerHTML=`<section class="card pad"><div class="row"><div><div class="hint">${esc(S.store.name||'（尚未填門市名稱）')}・${TPL[S.store.type]}</div><div style="font-size:1.4rem;font-weight:700" class="num">${money(all)}</div><div class="hint">${L.length} 項・${Object.keys(g).length} 家廠商</div></div></div></section>
+  $('#main').innerHTML=`<section class="card pad"><div class="hint">${esc(S.store.name||'（尚未填門市名稱）')}${S.store.tables||S.store.people?'・'+esc(S.store.tables||'-')+' 桌／'+esc(S.store.people||'-')+' 人':''}</div><div style="font-size:1.4rem;font-weight:700" class="num">${money(all)}</div><div class="hint">${L.length} 項・${Object.keys(g).length} 家廠商</div></section>
   ${Object.entries(g).map(([v,a])=>{const sub=a.reduce((s,x)=>s+x.p*x.q,0);return `<section class="card"><div class="vh"><b>${esc(v)}</b><span class="hint num">${a.length} 項・${money(sub)}</span><span class="sp"></span><button class="btn sm" data-copyv="${esc(v)}">複製此廠商</button></div>
-   ${a.map(x=>`<div class="item" data-id="${x.id}">${thumbHTML(byId(x.id)||{id:x.id,name:x.name})}<div style="min-width:0"><div class="nm">${esc(x.name)}</div><div class="meta">${esc(x.spec)}${x.spec?'・':''}${x.sheet}・單價 <span class="num">${money(x.p)}</span></div></div>
+   ${a.map(x=>`<div class="item" data-id="${esc(x.id)}">${thumbHTML(byId(x.id)||{id:x.id,name:x.name})}<div style="min-width:0"><div class="nm">${esc(x.name)}</div><div class="meta">${esc(x.spec)}${x.spec?'・':''}${x.sheet}・單價 <span class="num">${money(x.p)}</span></div></div>
    <div class="right"><div class="step"><button data-d="-1" aria-label="減少">−</button><input inputmode="numeric" type="number" min="0" value="${x.q}" aria-label="數量"><button data-d="1" aria-label="增加">+</button></div><div class="lt">${money(x.p*x.q)}</div></div></div>`).join('')}</section>`}).join('')}
   <section class="card pad"><label class="f">備註（給廠商或總部的話）<textarea class="input" id="note" rows="3">${esc(S.note)}</textarea></label></section>
   <section class="card pad"><div class="row"><button class="btn ${DB?'':'primary'}" id="cpAll">複製叫貨單文字</button><button class="btn" id="cpSheet">複製表格（貼到 Excel）</button><button class="btn ${DB?'primary':''}" id="saveOrd">${DB?'送出叫貨單給總部':'儲存到紀錄並清空'}</button></div>
-  <p class="hint" style="margin:10px 0 0">複製後可直接貼到 LINE 或電子郵件，傳給總部或各廠商。</p></section>`;
-}
-function vPrices(){
-  if(!ui.ptype)ui.ptype=S.store.type;
-  const t=ui.ptype,ov=S.prices[t]=S.prices[t]||{},q=ui.pq.trim().toLowerCase();
-  const all=allItems().filter(i=>i.t[t]&&i.sheet===ui.psheet);
-  const arr=all.filter(i=>(!ui.pOnly||ov[i.id]!=null)&&(!q||[i.name,i.spec,i.vendor,i.meal].join(' ').toLowerCase().includes(q)));
-  const nAdj=Object.keys(ov).length;
-  $('#main').innerHTML=`<section class="card pad"><h2>單價設定</h2><p class="hint" style="margin-top:-4px">修改的單價只套用在所選店型，叫貨單金額會同步更新。${DB?(CAN_ADMIN?'修改後所有分店會同步看到新單價。':'單價由總部統一設定，這裡只能查看。'):''}</p>
-  <div class="seg" id="pseg1">${Object.entries(TPL).map(([k,v])=>`<button data-t="${k}" aria-pressed="${t===k}">${v}</button>`).join('')}</div></section>
-  <div class="seg" id="pseg2">${SHEETS.map(s=>`<button data-s="${s}" aria-pressed="${ui.psheet===s}">${s}</button>`).join('')}</div>
-  <div class="row"><input class="input sp" id="pq" type="search" placeholder="搜尋品名、規格、廠商" value="${esc(ui.pq)}" style="min-width:160px"><button class="btn sm" id="pOnly" aria-pressed="${ui.pOnly}" style="${ui.pOnly?'background:var(--ink);color:var(--bg)':''}">只看已調整</button></div>
-  <div class="row"><span class="hint">${TPL[t]}已調整 ${nAdj} 項・顯示 ${arr.length} 項</span><span class="sp"></span><button class="btn sm danger" id="pReset">還原全部原價</button></div>
-  <section class="card" id="plist">${arr.length?arr.map(i=>pRow(i,t,ov)).join(''):'<div class="empty">沒有符合的品項</div>'}</section>`}
-function pRow(i,t,ov){const b=baseP(i,t),o=ov[i.id];
-  return `<div class="item" data-pid="${i.id}" style="grid-template-columns:56px minmax(0,1fr) auto">${thumbHTML(i)}<div style="min-width:0"><div class="nm">${esc(i.name)}</div><div class="meta">${esc(i.spec)}${i.spec?'・':''}${esc(i.vendor)}・原價 <span class="num">${b}</span></div><div class="meta pflag">${o!=null?'<span class="tag" style="background:var(--accent-soft);color:var(--accent)">已調整</span>':''}</div></div>
-  <label class="f" style="width:96px">單價<input class="input pin num" type="number" min="0" inputmode="decimal" value="${o!=null?o:b}" ${DB&&!CAN_ADMIN?'disabled':''}></label></div>`}
+  <p class="hint" style="margin:10px 0 0">複製後可直接貼到 LINE 或電子郵件，傳給總部或各廠商。</p></section>`}
 function vHistory(){
   const h=histList(),pend=h.filter(o=>o.status==='待處理').length;
-  const head=DB?`<section class="card pad"><div class="row"><b>各店送出的叫貨單</b><span class="sp"></span><span class="hint">共 ${h.length} 張${pend?'・待處理 '+pend+' 張':''}</span></div></section>`:'';
+  const loc=DB&&S.history.length?`<section class="card pad"><b>這台裝置有 ${S.history.length} 筆本機舊紀錄</b><p class="hint" style="margin:4px 0 8px">${CAN_ADMIN?'按下後上傳到雲端，所有人都看得到；上傳完成會清除本機舊紀錄。':'請總部登入後上傳。'}</p>${CAN_ADMIN?'<button class="btn primary" id="upLocal">上傳舊紀錄到雲端</button>':''}</section>`:'';
+  const head=(DB?`<section class="card pad"><div class="row"><b>各店送出的叫貨單</b><span class="sp"></span><span class="hint">共 ${h.length} 張${pend?'・待處理 '+pend+' 張':''}</span></div></section>`:'')+loc;
   $('#main').innerHTML=head+(h.length?h.map(o=>`<section class="card pad" data-h="${esc(o.id)}"><div class="row"><b>${esc(o.store.name||'（未填門市）')}</b>${o.status?`<span class="${o.status==='已處理'?'pill-ok':'tag'}" style="${o.status==='待處理'?'background:var(--accent-soft);color:var(--accent)':''}">${esc(o.status)}</span>`:''}<span class="hint">${new Date(o.ts).toLocaleString('zh-TW',{hour12:false})}</span><span class="sp"></span><b class="num">${money(o.total)}</b></div>
    <div class="hint">${o.lines.length} 項・${new Set(o.lines.map(x=>x.vendor)).size} 家廠商${o.store.person?'・'+esc(o.store.person):''}${o.store.tables||o.store.people?'・'+esc(o.store.tables||'-')+' 桌／'+esc(o.store.people||'-')+' 人':''}</div>
    <details style="margin-top:8px"><summary class="hint">明細</summary><div class="meta" style="margin-top:6px">${o.lines.map(x=>`${esc(x.vendor)}｜${esc(x.name)}${x.spec?'（'+esc(x.spec)+'）':''} ×${x.q}`).join('<br>')}</div></details>
    <div class="row" style="margin-top:10px"><button class="btn sm" data-act="cp">複製文字</button><button class="btn sm" data-act="re">載入到叫貨單</button>${DB&&CAN_ADMIN?`<button class="btn sm" data-act="st">${o.status==='已處理'?'改回待處理':'標示已處理'}</button>`:''}${!DB||CAN_ADMIN?'<button class="btn sm danger" data-act="del">刪除</button>':''}</div></section>`).join('')
-   :`<div class="card empty">還沒有叫貨單。<br>在「叫貨單」按「${DB?'送出叫貨單給總部':'儲存到紀錄並清空'}」後會出現在這裡。</div>`);
-}
-function vManage(){
-  const c=S.custom;
-  $('#main').innerHTML=`<section class="card pad"><h2>新增自訂品項</h2><p class="hint" style="margin-top:-4px">Excel 清單以外需要叫的東西可以加在這裡，兩種店型都會出現。</p>
-  <div class="grid"><label class="f">類別<select class="input" id="cSheet">${SHEETS.map(s=>`<option>${s}</option>`).join('')}</select></label>
-  <label class="f">廠商<input class="input" id="cVendor" list="vlist" placeholder="例如：大名行"><datalist id="vlist">${[...new Set(ITEMS.map(i=>i.vendor))].map(v=>`<option>${esc(v)}</option>`).join('')}</datalist></label>
-  <label class="f">品名<input class="input" id="cName"></label><label class="f">規格／單位<input class="input" id="cSpec" placeholder="例如：箱、50入/組"></label>
-  <label class="f">單價（NT$）<input class="input" id="cPrice" type="number" min="0" inputmode="decimal"></label>
-  <label class="f">物品圖片（選填）<input class="input" id="cImg" type="file" accept="image/*"></label></div>
-  <div id="cPrev" style="margin-top:8px"></div>
-  <div class="row" style="margin-top:10px"><button class="btn primary" id="cAdd">加入品項</button></div></section>
-  <section class="card"><div class="vh"><b>已新增的自訂品項</b><span class="hint">${c.length} 項</span></div>${c.length?c.map(x=>`<div class="item" style="grid-template-columns:56px minmax(0,1fr) auto" data-cid="${x.id}">${thumbHTML(x)}<div><div class="nm">${esc(x.name)}</div><div class="meta">${x.sheet}・${esc(x.vendor)}${x.spec?'・'+esc(x.spec):''}・${money(x.price)}</div></div><button class="btn sm danger" data-del="1">刪除</button></div>`).join(''):'<div class="empty">尚無自訂品項</div>'}</section>
-  <section class="card pad"><h2>資料來源</h2><p class="hint" style="margin:0">品項、規格、單價與建議開店數量取自「埔里萬家福店」與「新竹忠孝店（電磁爐）」兩份叫貨表（餐具 30 項、器具約 140 項）。單價更新請提供新的 Excel，會直接更新整份品項資料。</p></section>`;
-}
+   :`<div class="card empty">還沒有叫貨單。<br>在「叫貨單」按「${DB?'送出叫貨單給總部':'儲存到紀錄並清空'}」後會出現在這裡。</div>`)}
+function iRow(i){return `<div class="item" data-iid="${esc(i.id)}" style="grid-template-columns:56px minmax(0,1fr) auto;${i.active===false?'opacity:.55':''}">${thumbHTML(i)}
+  <div style="min-width:0"><div class="nm">${esc(i.name)}</div><div class="meta">${esc(i.spec)}${i.spec?'・':''}${esc(i.vendor)}${i.active===false?'・已停用':''}</div><div style="margin-top:4px"><button class="btn sm" data-edit="${esc(i.id)}">編輯</button></div></div>
+  <label class="f" style="width:96px">單價<input class="input pin num" type="number" min="0" step="any" inputmode="decimal" value="${price(i)}"></label></div>`}
+function iList(){const q=ui.iq.trim().toLowerCase();
+  return ITEMS.filter(i=>i.sheet===ui.isheet&&(!ui.iOff||i.active===false)&&(!q||[i.name,i.spec,i.vendor,i.meal].join(' ').toLowerCase().includes(q)))}
+function vItems(){
+  if(!DB){$('#main').innerHTML=`<div class="card empty">目前是本機模式，尚未連線後端，無法線上管理品項。<br>請依部署說明設定 API 網址。</div>`;return}
+  const head=`<section class="card pad"><h2>品項管理</h2><p class="hint" style="margin-top:-4px">${CAN_ADMIN?'修改單價、品名、圖片後，所有分店會在 30 秒內同步看到。':'門市可新增品項；修改或刪除品項請洽總部。'}</p>
+  <div class="row"><button class="btn primary" id="addItem">新增品項</button>${CAN_ADMIN?'<button class="btn" id="importSeed">匯入初始品項</button>':''}<span class="hint">共 ${ITEMS.length} 項</span></div></section>`;
+  if(!CAN_ADMIN){$('#main').innerHTML=head;return}
+  const arr=iList();
+  $('#main').innerHTML=head+`<div class="seg" id="iseg">${SHEETS.map(s=>`<button data-s="${s}" aria-pressed="${ui.isheet===s}">${s}</button>`).join('')}</div>
+  <div class="row"><input class="input sp" id="iq" type="search" placeholder="搜尋品名、規格、廠商" value="${esc(ui.iq)}" style="min-width:160px"><button class="btn sm" id="iOff" aria-pressed="${ui.iOff}" style="${ui.iOff?'background:var(--ink);color:var(--bg)':''}">只看已停用</button></div>
+  <section class="card" id="ilist">${arr.length?arr.map(iRow).join(''):'<div class="empty">沒有符合的品項</div>'}</section>`}
+function itemModal(it){
+  editImg=null;const n=!it,adm=CAN_ADMIN;it=it||{sheet:ui.isheet,vendor:'',name:'',spec:'',mat:'',meal:'',zone:'',price:'',sug:0,active:true,img:''};
+  const v=[...new Set(ITEMS.map(i=>i.vendor))];
+  $('#layer').innerHTML=`<div class="modal"><form class="box" id="itemF" style="max-height:92vh;overflow:auto"><b style="font-size:1.05rem">${n?'新增品項':'編輯品項'}</b>
+  <div class="grid">
+   <label class="f">類別<select class="input" id="eSheet">${SHEETS.map(s=>`<option ${it.sheet===s?'selected':''}>${s}</option>`).join('')}</select></label>
+   <label class="f">廠商<input class="input" id="eVendor" list="evl" value="${esc(it.vendor)}" required><datalist id="evl">${v.map(x=>`<option>${esc(x)}</option>`).join('')}</datalist></label>
+   <label class="f" style="grid-column:1/-1">品名<input class="input" id="eName" value="${esc(it.name)}" required></label>
+   <label class="f">規格／尺寸<input class="input" id="eSpec" value="${esc(it.spec)}"></label>
+   <label class="f">單價（NT$）<input class="input" id="ePrice" type="number" min="0" step="any" inputmode="decimal" value="${esc(it.price)}" required></label>
+   ${adm?`<label class="f">材質<input class="input" id="eMat" value="${esc(it.mat)}"></label>
+   <label class="f">餐別／用途<input class="input" id="eMeal" value="${esc(it.meal)}"></label>
+   <label class="f">存放區<input class="input" id="eZone" value="${esc(it.zone)}"></label>
+   <label class="f">建議數量<input class="input" id="eSug" type="number" min="0" inputmode="numeric" value="${esc(it.sug||0)}"></label>`:''}
+   <label class="f" style="grid-column:1/-1">物品圖片${it.img?'（不選檔案則保留原圖）':''}<input class="input" id="eImg" type="file" accept="image/*"></label>
+  </div>
+  <div class="row" id="ePrev">${it.img?`<img alt="" src="${esc(it.img)}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"><button class="btn sm" type="button" id="eNoImg">移除圖片</button>`:''}</div>
+  ${adm&&!n?`<label class="row" style="gap:8px"><input type="checkbox" id="eActive" ${it.active!==false?'checked':''}> 啟用（取消勾選＝停用，叫貨頁不再顯示）</label>`:''}
+  <div class="row"><button class="btn primary" type="submit">儲存</button><button class="btn" type="button" id="eCancel">取消</button><span class="sp"></span>${adm&&!n?'<button class="btn danger" type="button" id="eDel">刪除</button>':''}</div></form></div>`;
+  $('#eCancel').onclick=()=>{$('#layer').innerHTML=''};
+  $('#eImg').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{editImg=await resizeImg(f);$('#ePrev').innerHTML=`<img alt="預覽" src="${editImg}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`}catch(x){toast('圖片讀取失敗，請換一張')}};
+  const rm=$('#eNoImg');if(rm)rm.onclick=()=>{editImg='';$('#ePrev').innerHTML='<span class="hint">儲存後將移除圖片</span>'};
+  const del=$('#eDel');if(del)del.onclick=async()=>{if(!del.dataset.arm){del.dataset.arm=1;del.textContent='再按一次確認刪除';return}
+    try{const r=await api('deleteItem',it.id);if(r&&r.ok){$('#layer').innerHTML='';toast('已刪除');await loadAll(true)}else toast('刪除失敗')}catch(e){toast('刪除失敗')}};
+  $('#itemF').onsubmit=async ev=>{ev.preventDefault();
+    const o={id:n?'':it.id,sheet:$('#eSheet').value,vendor:$('#eVendor').value.trim(),name:$('#eName').value.trim(),spec:$('#eSpec').value.trim(),price:+$('#ePrice').value,
+      mat:adm?$('#eMat').value.trim():it.mat,meal:adm?$('#eMeal').value.trim():it.meal,zone:adm?$('#eZone').value.trim():it.zone,sug:adm?+$('#eSug').value||0:0,
+      active:adm&&!n?$('#eActive').checked:true,img:editImg!==null?editImg:(it.img||'')};
+    if(!o.name||!o.vendor||!(o.price>=0)){toast('請填廠商、品名與單價');return}
+    try{const r=await api('saveItem',o);if(r&&r.ok){$('#layer').innerHTML='';toast(n?'已新增品項':'已儲存');await loadAll(true)}else toast(r&&r.error==='forbidden'?'沒有權限':'儲存失敗')}catch(e){toast('同步失敗，請稍後再試')}}}
 
-/* ---------- events ---------- */
+/* ---------- 事件 ---------- */
 document.addEventListener('click',e=>{
   const t=e.target;
   const nb=t.closest('#nav button');if(nb){setView(nb.dataset.v);window.scrollTo(0,0);return}
   if(t.closest('#barGo')){setView('cart');window.scrollTo(0,0);return}
+  if(t.id==='logout'){logout('');return}
   const sg=t.closest('#seg button');if(sg){ui.sheet=sg.dataset.s;ui.vendor='';ui.zone='';vOrder();return}
+  const ig=t.closest('#iseg button');if(ig){ui.isheet=ig.dataset.s;vItems();return}
   const vc=t.closest('#vchips button');if(vc){if(vc.id==='onlySel')ui.onlySel=!ui.onlySel;else ui.vendor=vc.dataset.v;vOrder();return}
-  const z=t.closest('[data-zoom]');if(z){const i=byId(z.dataset.zoom);if(!imgSrc(i))return;$('#layer').innerHTML=`<div class="lb" id="lb"><div><img alt="" src="${imgSrc(i)}"><p>${esc(i.name)} ${esc(i.spec)}</p></div></div>`;$('#lb').onclick=()=>$('#layer').innerHTML='';return}
-  const st=t.closest('.step button');if(st){const card=st.closest('.item');const inp=card.querySelector('input');setQty(card.dataset.id,(+inp.value||0)+ +st.dataset.d,card);if(ui.view==='cart'){const wasLast=!cart().length;vCart();}return}
-  if(t.id==='applyTpl'){const n=vis().filter(i=>i.sheet===ui.sheet&&i.t[S.store.type].q>0);n.forEach(i=>{S.qty[i.id]=i.t[S.store.type].q});save();vOrder();toast(`已帶入${ui.sheet} ${n.length} 項的建議數量`);return}
+  const z=t.closest('[data-zoom]');if(z){const i=byId(z.dataset.zoom);if(!i||!imgSrc(i))return;$('#layer').innerHTML=`<div class="lb" id="lb"><div><img alt="" src="${esc(imgSrc(i))}"><p>${esc(i.name)} ${esc(i.spec)}</p></div></div>`;$('#lb').onclick=()=>$('#layer').innerHTML='';return}
+  const st=t.closest('.step button');if(st){const card=st.closest('.item');const inp=card.querySelector('input');setQty(card.dataset.id,(+inp.value||0)+ +st.dataset.d,card);if(ui.view==='cart')vCart();return}
+  if(t.id==='applyTpl'){const n=vis().filter(i=>i.sheet===ui.sheet&&i.sug>0);n.forEach(i=>{S.qty[i.id]=i.sug});save();vOrder();toast(`已帶入${ui.sheet} ${n.length} 項的建議數量`);return}
   if(t.id==='clearAll'){if(t.dataset.arm){S.qty={};save();vOrder();toast('已清空');return}t.dataset.arm=1;t.textContent='再按一次確認清空';setTimeout(()=>{if(t.isConnected){delete t.dataset.arm;t.textContent='清空數量'}},2500);return}
   if(t.id==='cpAll'){copy(orderText(lines(),meta()),'叫貨單已複製');return}
   if(t.id==='cpSheet'){copy(sheetText(lines()),'表格已複製');return}
   const cv=t.closest('[data-copyv]');if(cv){copy(orderText(lines().filter(x=>x.vendor===cv.dataset.copyv),meta(),cv.dataset.copyv),'已複製 '+cv.dataset.copyv);return}
-  if(t.id==='logout'){logout('');return}
   if(t.id==='saveOrd'){submitOrder();return}
   const ha=t.closest('[data-act]');if(ha){const card=ha.closest('[data-h]');const o=histList().find(x=>String(x.id)===card.dataset.h);if(!o)return;
     if(ha.dataset.act==='cp')copy(orderText(o.lines,{...o.store,note:o.note}),'已複製');
     if(ha.dataset.act==='re'){S.store={...S.store,...o.store};S.qty={};o.lines.forEach(x=>{if(byId(x.id))S.qty[x.id]=x.q});S.note=o.note||'';save();toast('已載入');setView('cart')}
     if(ha.dataset.act==='st'){toggleStatus(o)}
     if(ha.dataset.act==='del'){if(ha.dataset.arm){delOrder(o)}else{ha.dataset.arm=1;ha.textContent='再按一次刪除';setTimeout(()=>{if(ha.isConnected){delete ha.dataset.arm;ha.textContent='刪除'}},2500)}}return}
-  const p1=t.closest('#pseg1 button');if(p1){ui.ptype=p1.dataset.t;vPrices();return}
-  const p2=t.closest('#pseg2 button');if(p2){ui.psheet=p2.dataset.s;vPrices();return}
-  if(t.id==='pOnly'){ui.pOnly=!ui.pOnly;vPrices();return}
-  if(t.id==='pReset'){if(t.dataset.arm){if(DB&&!CAN_ADMIN)return;S.prices[ui.ptype]={};save();pushPrices();vPrices();toast('已還原原價');return}t.dataset.arm=1;t.textContent='再按一次確認還原';setTimeout(()=>{if(t.isConnected){delete t.dataset.arm;t.textContent='還原全部原價'}},2500);return}
-  if(t.id==='cAdd'){const n=$('#cName').value.trim(),p=+$('#cPrice').value,v=$('#cVendor').value.trim();if(!n||!v||!(p>=0)||$('#cPrice').value===''){toast('請填廠商、品名與單價');return}
-    const it={id:'X'+Date.now(),sheet:$('#cSheet').value,vendor:v,name:n,spec:$('#cSpec').value.trim(),mat:'',meal:'',zone:'',price:p,img:pendingImg};pendingImg='';
-    if(DB){api('addCustom',it).then(r=>{if(r&&r.error)toast('新增失敗');loadAll()}).catch(()=>toast('同步失敗，請稍後再試'))}
-    S.custom.push(it);save();lsSave();vManage();toast('已加入，可到「叫貨」搜尋');return}
-  const cd=t.closest('[data-del]');if(cd){const id=cd.closest('[data-cid]').dataset.cid;S.custom=S.custom.filter(x=>x.id!==id);delete S.qty[id];if(DB)api('deleteCustom',id).then(loadAll).catch(()=>{});save();vManage();return}
+  if(t.id==='upLocal'){t.disabled=true;t.textContent='上傳中…';
+    api('importOrders',S.history.map(o=>({ts:o.ts,store:o.store,note:o.note,lines:o.lines,status:o.status||'已處理'}))).then(async r=>{if(r&&r.ok){S.history=[];save();lsSave();toast('已上傳 '+r.added+' 筆');await loadAll()}else{toast('上傳失敗');t.disabled=false;t.textContent='上傳舊紀錄到雲端'}}).catch(()=>{toast('上傳失敗，請稍後再試');t.disabled=false;t.textContent='上傳舊紀錄到雲端'});return}
+  if(t.id==='addItem'){itemModal(null);return}
+  const ed=t.closest('[data-edit]');if(ed){itemModal(byId(ed.dataset.edit));return}
+  if(t.id==='iOff'){ui.iOff=!ui.iOff;vItems();return}
+  if(t.id==='importSeed'){
+    if(ITEMS.length&&!t.dataset.arm){t.dataset.arm=1;t.textContent='會覆蓋全部品項，再按一次確認';return}
+    t.disabled=true;t.textContent='匯入中…';
+    fetch('data/seed.json').then(r=>r.json()).then(j=>api('importItems',j.items)).then(async r=>{if(r&&r.ok){toast('已匯入 '+r.count+' 項');await loadAll(true)}else toast('匯入失敗')}).catch(()=>toast('匯入失敗，請確認網路'));
+    return}
 });
 document.addEventListener('input',e=>{
-  const t=e.target;
+  const t=e.target,S_=S.store;
   if(t.id==='q'){ui.q=t.value;drawList()}
   else if(t.id==='zone'){ui.zone=t.value;drawList()}
-  else if(t.id==='stName'){S.store.name=t.value;save()}
-  else if(t.id==='stPerson'){S.store.person=t.value;save()}
-  else if(t.id==='stTitle'){S.store.title=t.value;save()}
-  else if(t.id==='stTax'){S.store.taxId=t.value;save()}
-  else if(t.id==='stPhone'){S.store.phone=t.value;save()}
-  else if(t.id==='stAddr'){S.store.address=t.value;save()}
-  else if(t.id==='stTables'){S.store.tables=t.value;save()}
-  else if(t.id==='stPeople'){S.store.people=t.value;save()}
-  else if(t.id==='stDate'){S.store.date=t.value;save()}
+  else if(t.id==='iq'){ui.iq=t.value;const a=iList();$('#ilist').innerHTML=a.length?a.map(iRow).join(''):'<div class="empty">沒有符合的品項</div>'}
+  else if(t.id==='stName'){S_.name=t.value;save()}
+  else if(t.id==='stPerson'){S_.person=t.value;save()}
+  else if(t.id==='stDate'){S_.date=t.value;save()}
+  else if(t.id==='stTitle'){S_.title=t.value;save()}
+  else if(t.id==='stTax'){S_.taxId=t.value;save()}
+  else if(t.id==='stPhone'){S_.phone=t.value;save()}
+  else if(t.id==='stAddr'){S_.address=t.value;save()}
+  else if(t.id==='stTables'){S_.tables=t.value;save()}
+  else if(t.id==='stPeople'){S_.people=t.value;save()}
   else if(t.id==='note'){S.note=t.value;save()}
-  else if(t.id==='pq'){ui.pq=t.value;const tt=ui.ptype,ov=S.prices[tt];const q=ui.pq.trim().toLowerCase();const arr=allItems().filter(i=>i.t[tt]&&i.sheet===ui.psheet&&(!ui.pOnly||ov[i.id]!=null)&&(!q||[i.name,i.spec,i.vendor,i.meal].join(' ').toLowerCase().includes(q)));$('#plist').innerHTML=arr.length?arr.map(i=>pRow(i,tt,ov)).join(''):'<div class="empty">沒有符合的品項</div>'}
-  else if(t.classList.contains('pin')){const row=t.closest('[data-pid]'),i=byId(row.dataset.pid),tt=ui.ptype,ov=S.prices[tt];const v=t.value===''?NaN:+t.value;
-    if(DB&&!CAN_ADMIN)return;
-    if(!(v>=0)||v===baseP(i,tt))delete ov[i.id];else ov[i.id]=v;save();pushPrices();
-    row.querySelector('.pflag').innerHTML=ov[i.id]!=null?'<span class="tag" style="background:var(--accent-soft);color:var(--accent)">已調整</span>':''}
-  else if(t.id==='cImg'){const f=t.files[0];pendingImg='';$('#cPrev').innerHTML='';if(f)resizeImg(f).then(u=>{pendingImg=u;$('#cPrev').innerHTML=`<img alt="預覽" src="${u}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`}).catch(()=>toast('圖片讀取失敗，請換一張'))}
   else if(t.closest('.step')&&t.tagName==='INPUT'){const card=t.closest('.item');const q=Math.max(0,Math.floor(+t.value||0));if(q)S.qty[card.dataset.id]=q;else delete S.qty[card.dataset.id];save();card.classList.toggle('on',q>0);card.querySelector('.lt').textContent=q?money(price(byId(card.dataset.id))*q):'';updateBar()}
 });
 document.addEventListener('change',e=>{
   const t=e.target;
-  if(t.id==='stType'){S.store.type=t.value;save();ui.vendor='';ui.zone='';vOrder();updateBar()}
+  if(t.classList.contains('pin')){
+    if(!CAN_ADMIN)return;const it=byId(t.closest('[data-iid]').dataset.iid);const v=t.value===''?NaN:+t.value;
+    if(!it)return;if(!(v>=0)){t.value=price(it);return}if(v===price(it))return;
+    const old=it.price;it.price=v;
+    api('saveItem',{...it}).then(r=>{if(r&&r.ok){toast('已更新單價');loadAll(true)}else{it.price=old;t.value=old;toast('更新失敗')}}).catch(()=>{it.price=old;t.value=old;toast('同步失敗')})}
   else if(t.closest('.step')&&t.tagName==='INPUT'&&ui.view==='cart'){vCart()}
 });
 window.addEventListener('hashchange',()=>{const v=location.hash.slice(1);if(VIEWS.includes(v)&&v!==ui.view){ui.view=v;render()}});
-
-(async function(){
-  load();
-  const v=location.hash.slice(1);if(VIEWS.includes(v))ui.view=v;
-  try{
-    const [a,b]=await Promise.all([fetch('data/items.json').then(r=>r.json()),fetch('data/imgs.json').then(r=>r.json())]);
-    ITEMS=a.items.filter(i=>i.sheet!=='物料');IMGS=b;
-  }catch(err){$('#main').innerHTML='<div class="card empty">品項資料載入失敗，請重新整理頁面。</div>';return}
-  render();
-  boot();
-})();
+(function(){load();const v=location.hash.slice(1);if(VIEWS.includes(v))ui.view=v;render();boot()})();
 </script>
-
 </body></html>
