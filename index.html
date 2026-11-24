@@ -131,7 +131,7 @@ details summary{cursor:pointer;font-weight:700}
 
 <script>
 /* 部署 Apps Script 後，把下面的網址換成「網頁應用程式」網址（結尾是 /exec） */
-const API_URL_DEFAULT='https://script.google.com/macros/s/AKfycbzNaWkLQr4K5qdAtIvieGztV5va_iuuJe7iDUZ1EMT1gl3yJwB3inV-1ZQ2WB62l0Z9/exec';
+const API_URL_DEFAULT='';
 let API_URL=API_URL_DEFAULT;try{API_URL=API_URL_DEFAULT||localStorage.getItem('jcx-api')||''}catch(e){}
 const SHEETS=['餐具','器具'];
 const LS='jcx-order-v2',LSI='jcx-items-v2';
@@ -146,7 +146,7 @@ function load(){try{let raw=localStorage.getItem(LS);if(!raw){raw=localStorage.g
 function lsSave(){try{localStorage.setItem(LS,JSON.stringify(S))}catch(e){}}
 function save(){clearTimeout(saveT);saveT=setTimeout(lsSave,200)}
 function cacheItems(){try{localStorage.setItem(LSI,JSON.stringify({ver:VER,items:ITEMS}))}catch(e){}}
-function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),1800)}
+function toast(m,ms){const t=document.createElement('div');t.className='toast';t.textContent=m;t.style.cssText+=';white-space:normal;text-align:center';document.body.appendChild(t);setTimeout(()=>t.remove(),ms||1800)}
 function typing(){const a=document.activeElement;return !!a&&['INPUT','TEXTAREA','SELECT'].includes(a.tagName)}
 function setSync(t,k){const e=$('#syncSt');if(!e)return;e.textContent=t?'● '+t:'';e.className='sync'+(k?' '+k:'')}
 
@@ -189,7 +189,7 @@ function api(name,...args){
   return fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({fn:name,args:[PIN,...args]})})
     .then(r=>r.json()).then(r=>{
       if(r&&r.error==='auth'){logout('密碼已失效，請重新登入');throw new Error('auth')}
-      if(r&&r.error==='server')throw new Error('server');
+      if(r&&r.error==='server'){const e=new Error('server');e.detail=r.message||'';throw e}
       return r})}
 async function loadAll(force){
   try{
@@ -212,6 +212,22 @@ async function submitOrder(){
   if(DB)await loadAll();setView('history')}
 async function delOrder(o){if(DB){try{await api('deleteOrder',o.id);await loadAll()}catch(e){toast('刪除失敗')}}else{S.history=S.history.filter(x=>x!==o);save();vHistory()}}
 async function toggleStatus(o){try{await api('setStatus',o.id,o.status==='已處理'?'待處理':'已處理');await loadAll()}catch(e){toast('更新失敗')}}
+async function loadJSON(path){
+  let r;try{r=await fetch(path+'?t='+Date.now())}catch(e){throw new Error('讀不到 '+path+'：請確認網路，且檔案已上傳到 GitHub 的 data 資料夾')}
+  if(!r.ok)throw new Error('讀不到 '+path+'（HTTP '+r.status+'）：請確認已把檔案上傳到 GitHub 儲存庫的 data 資料夾，並等 Pages 更新後再試')
+  try{return await r.json()}catch(e){throw new Error(path+' 內容格式不正確，請重新上傳檔案')}}
+function need(r,what){
+  if(r&&r.ok)return r;
+  const c=r&&r.error;
+  if(c==='bad_fn')throw new Error(what+'失敗：後端程式還是舊版。請貼上新版 Code.gs，再到「部署 → 管理部署作業 → 編輯 → 版本選新版本 → 部署」');
+  if(c==='forbidden')throw new Error(what+'失敗：需要用總部密碼登入');
+  if(c==='bad')throw new Error(what+'失敗：資料內容被後端拒絕，請告訴我這個訊息');
+  throw new Error(what+'失敗：後端回應 '+(c||'無回應'))}
+function explain(e,what){
+  if(e&&e.message==='server')return what+'失敗：後端程式發生錯誤：'+(e.detail||'未知錯誤')+'（請到 Apps Script 左側「執行」查看詳情）';
+  if(e&&e.message==='auth')return '密碼已失效，請重新登入';
+  if(e instanceof TypeError)return what+'失敗：連不到後端，請確認網路或後端網址';
+  return (e&&e.message)||what+'失敗'}
 function setupUI(msg){
   $('#layer').innerHTML=`<div class="modal"><form class="box" id="setupF"><b style="font-size:1.1rem">連線設定</b>
   <span class="hint">請貼上 Apps Script「網頁應用程式」網址（https://script.google.com/macros/s/…/exec）。設定一次後，這台裝置會記住。</span>
@@ -406,16 +422,21 @@ document.addEventListener('click',e=>{
   const ed=t.closest('[data-edit]');if(ed){itemModal(byId(ed.dataset.edit));return}
   if(t.id==='iOff'){ui.iOff=!ui.iOff;vItems();return}
   if(t.id==='importLegacy'){
-    t.disabled=true;t.textContent='匯入中…';
-    fetch('data/legacy.json').then(r=>r.json()).then(async j=>{
-      const a=await api('mergeItems',j.items),b=await api('importOrders',j.orders);
-      if(a&&a.ok&&b&&b.ok){toast(`已補入 ${a.added} 項品項、${b.added} 筆舊叫貨紀錄`+(b.added===0&&a.added===0?'（先前已匯入過）':''));await loadAll(true);t.disabled=false;t.textContent='匯入舊資料'}
-      else throw new Error('fail')}).catch(()=>{toast('匯入失敗，請確認網路後再試');t.disabled=false;t.textContent='匯入舊資料'});
+    const old=t.textContent;t.disabled=true;t.textContent='匯入中…';
+    (async()=>{try{
+      const j=await loadJSON('data/legacy.json');
+      const a=need(await api('mergeItems',j.items),'補入品項'),b=need(await api('importOrders',j.orders),'匯入舊叫貨紀錄');
+      toast(`已補入 ${a.added} 項品項、${b.added} 筆舊叫貨紀錄`+(b.added===0&&a.added===0?'（先前已匯入過）':''),4000);await loadAll(true);
+    }catch(e){toast(explain(e,'匯入舊資料'),9000)}finally{t.disabled=false;t.textContent='匯入舊資料'}})();
     return}
   if(t.id==='importSeed'){
     if(ITEMS.length&&!t.dataset.arm){t.dataset.arm=1;t.textContent='會覆蓋全部品項，再按一次確認';return}
     t.disabled=true;t.textContent='匯入中…';
-    fetch('data/seed.json').then(r=>r.json()).then(j=>api('importItems',j.items)).then(async r=>{if(r&&r.ok){toast('已匯入 '+r.count+' 項');await loadAll(true)}else toast('匯入失敗')}).catch(()=>toast('匯入失敗，請確認網路'));
+    (async()=>{try{
+      const j=await loadJSON('data/seed.json');
+      const r=need(await api('importItems',j.items),'匯入品項');
+      toast('已匯入 '+r.count+' 項品項',4000);await loadAll(true);
+    }catch(e){toast(explain(e,'匯入品項'),9000)}finally{t.disabled=false;t.textContent='匯入初始品項';delete t.dataset.arm}})();
     return}
 });
 document.addEventListener('input',e=>{
