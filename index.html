@@ -73,6 +73,10 @@ label.f{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--m
 .step button{width:38px;height:40px;border:0;background:var(--chip);font-size:1.2rem;line-height:1}
 .step input{width:48px;height:40px;border:0;text-align:center;background:transparent;font-variant-numeric:tabular-nums;font-weight:700;-moz-appearance:textfield}
 .step input::-webkit-outer-spin-button,.step input::-webkit-inner-spin-button{-webkit-appearance:none}
+.stk{display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--muted)}
+.stk input{width:62px;height:34px;border:1px solid var(--line);border-radius:8px;background:var(--surface);text-align:center;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
+.stk.need input{border-color:var(--accent);background:var(--accent-soft)}
+.stk.need{color:var(--accent);font-weight:600}
 .lt{font-size:.8rem;text-align:right;color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums;min-height:1.2em}
 .right{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
 .bar{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--surface);border-top:1px solid var(--line);
@@ -133,14 +137,14 @@ details summary{cursor:pointer;font-weight:700}
 
 <script>
 /* 部署 Apps Script 後，把下面的網址換成「網頁應用程式」網址（結尾是 /exec） */
-const API_URL_DEFAULT='https://script.google.com/macros/s/AKfycbzNaWkLQr4K5qdAtIvieGztV5va_iuuJe7iDUZ1EMT1gl3yJwB3inV-1ZQ2WB62l0Z9/exec';
+const API_URL_DEFAULT='';
 let API_URL=API_URL_DEFAULT;try{API_URL=API_URL_DEFAULT||localStorage.getItem('jcx-api')||''}catch(e){}
 const SHEETS=['餐具','器具'];
 const LS='jcx-order-v2',LSI='jcx-items-v2';
 const VIEWS=['order','cart','history','items','stores'];
-let S={store:{name:'',person:'',date:'',title:'',taxId:'',phone:'',address:'',tables:'',people:''},qty:{},note:'',history:[]};
+let S={store:{name:'',person:'',date:'',title:'',taxId:'',phone:'',address:'',tables:'',people:''},qty:{},stock:{},note:'',history:[]};
 let ITEMS=[],ORDERS=[],STORES=[],VER='',DB=false,ROLE='',CAN_ADMIN=false,PIN='',pollT=null,editImg=null,saveT;
-let ui={sheet:'餐具',q:'',vendor:'',zone:'',onlySel:false,view:'order',isheet:'餐具',iq:'',iOff:false,iHide:false,sort:'date'};
+let ui={sheet:'餐具',q:'',vendor:'',zone:'',onlySel:false,view:'order',isheet:'餐具',iq:'',iOff:false,iHide:false,hq:'',sort:'date'};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money=n=>'NT$ '+Math.round(n).toLocaleString('en-US');
@@ -159,9 +163,12 @@ const price=i=>+i.price||0;
 function imgSrc(i){return i&&i.img?i.img:''}
 function thumbHTML(i){const u=imgSrc(i);return u?`<button class="thumb" data-zoom="${esc(i.id)}" aria-label="放大 ${esc(i.name)}"><img alt="" loading="lazy" src="${esc(u)}"></button>`:`<div class="thumb none">無圖</div>`}
 function resizeImg(file){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>{const im=new Image();im.onload=()=>{const m=200,k=Math.min(1,m/Math.max(im.width,im.height));const c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',.7))};im.onerror=rej;im.src=fr.result};fr.onerror=rej;fr.readAsDataURL(file)})}
-function cart(){const out=[];for(const i of vis()){const q=+S.qty[i.id]||0;if(q>0)out.push({i,q,p:price(i)})}return out}
+function cart(){const out=[];for(const i of vis()){const q=+S.qty[i.id]||0;if(q>0)out.push({i,q,p:price(i),s:hasStock(i.id)?+S.stock[i.id]:null})}return out}
+const needStock=()=>!CAN_ADMIN;
+const hasStock=id=>{S.stock=S.stock||{};const v=S.stock[id];return v!==undefined&&v!==null&&v!==''};
 const total=c=>c.reduce((a,x)=>a+x.p*x.q,0);
-function lines(){return cart().map(({i,q,p})=>({id:i.id,sheet:i.sheet,vendor:i.vendor,name:i.name,spec:i.spec,q,p}))}
+function lines(){return cart().map(({i,q,p,s})=>({id:i.id,sheet:i.sheet,vendor:i.vendor,name:i.name,spec:i.spec,q,p,s}))}
+const stk=x=>x.s===null||x.s===undefined||x.s===''?null:x.s;
 const meta=()=>({...S.store,note:S.note});
 function orderText(L,m,only){
   const g={};L.forEach(x=>(g[x.vendor]=g[x.vendor]||[]).push(x));
@@ -175,11 +182,11 @@ function orderText(L,m,only){
   if(m.person)s+=`叫貨人：${m.person}\n`;
   if(m.date)s+=`期望到貨：${m.date}\n`;
   let all=0;
-  for(const v of vs){const a=g[v]||[];let sub=0;s+=`\n■ ${v}\n`;a.forEach((x,k)=>{s+=`${k+1}. ${x.name}${x.spec?'（'+x.spec+'）':''} ×${x.q}　@${x.p}　= ${Math.round(x.p*x.q).toLocaleString('en-US')}\n`;sub+=x.p*x.q});s+=`${v} 小計：${money(sub)}\n`;all+=sub}
+  for(const v of vs){const a=g[v]||[];let sub=0;s+=`\n■ ${v}\n`;a.forEach((x,k)=>{s+=`${k+1}. ${x.name}${x.spec?'（'+x.spec+'）':''} ×${x.q}　@${x.p}　= ${Math.round(x.p*x.q).toLocaleString('en-US')}${stk(x)!==null?'　（現有庫存 '+stk(x)+'）':''}\n`;sub+=x.p*x.q});s+=`${v} 小計：${money(sub)}\n`;all+=sub}
   s+=`\n${only?'小計':'總計'}：${money(all)}`;
   if(m.note)s+=`\n備註：${m.note}`;
   return s}
-function sheetText(L){return ['廠商\t類別\t品名\t規格\t單價\t數量\t小計'].concat(L.map(x=>[x.vendor,x.sheet,x.name.replace(/\t/g,' '),x.spec,x.p,x.q,x.p*x.q].join('\t'))).join('\n')}
+function sheetText(L){return ['廠商\t類別\t品名\t規格\t現有庫存\t單價\t數量\t小計'].concat(L.map(x=>[x.vendor,x.sheet,x.name.replace(/\t/g,' '),x.spec,stk(x)===null?'':stk(x),x.p,x.q,x.p*x.q].join('\t'))).join('\n')}
 async function copy(text,msg){
   try{await navigator.clipboard.writeText(text);toast(msg||'已複製');return}catch(e){}
   const l=$('#layer');l.innerHTML=`<div class="modal"><div class="box"><b>請長按全選後複製</b><textarea class="input" id="cpTa" readonly>${esc(text)}</textarea><button class="btn primary" id="cpX">關閉</button></div></div>`;
@@ -207,10 +214,11 @@ function startPoll(){clearInterval(pollT);pollT=setInterval(()=>{if(!document.hi
 const histList=()=>DB?ORDERS:S.history;
 async function submitOrder(){
   const L=lines();if(!L.length)return;
+  if(needStock()&&L.some(x=>stk(x)===null)){toast('有品項尚未填寫現有庫存，請先填寫',4000);setView('order');return}
   const o={ts:Date.now(),store:{...S.store},note:S.note,lines:L,total:L.reduce((a,x)=>a+x.p*x.q,0),status:'待處理'};
   if(DB){try{const r=await api('submitOrder',{store:o.store,note:o.note,lines:L});if(!r||!r.ok){toast('送出失敗，請確認內容後再試');return}}catch(e){if(e.message!=='auth')toast('送出失敗，請確認網路後再試');return}}
   else S.history.unshift({id:o.ts,...o});
-  S.qty={};S.note='';save();lsSave();toast(DB?'已送出給總部':'已儲存到紀錄');
+  S.qty={};S.stock={};S.note='';save();lsSave();toast(DB?'已送出給總部':'已儲存到紀錄');
   if(DB)await loadAll();setView('history')}
 async function delOrder(o){if(DB){try{await api('deleteOrder',o.id);await loadAll()}catch(e){toast('刪除失敗')}}else{S.history=S.history.filter(x=>x!==o);save();vHistory()}}
 async function toggleStatus(o){try{await api('setStatus',o.id,o.status==='已處理'?'待處理':'已處理');await loadAll()}catch(e){toast('更新失敗')}}
@@ -337,11 +345,15 @@ function itemHTML(i){
   return `<div class="item ${q?'on':''}" data-id="${esc(i.id)}">${thumbHTML(i)}
    <div style="min-width:0"><div class="nm">${esc(i.name)}</div><div class="meta">${esc(i.spec)}${i.spec?'・':''}${esc(i.vendor)}</div><div style="margin-top:3px">${tags}</div></div>
    <div class="right"><div class="price"><b class="num">${money(p)}</b>${sug?` ・建議 ${sug}`:''}</div>
+    <label class="stk ${needStock()&&!hasStock(i.id)?'need':''}">現有庫存${needStock()?'':'（選填）'}<input class="sk" type="number" min="0" step="1" inputmode="numeric" value="${hasStock(i.id)?S.stock[i.id]:''}" placeholder="${needStock()?'必填':''}" aria-label="現有庫存"></label>
     <div class="step"><button data-d="-1" aria-label="減少">−</button><input inputmode="numeric" type="number" min="0" value="${q||''}" placeholder="0" aria-label="數量"><button data-d="1" aria-label="增加">+</button></div>
     <div class="lt">${q?money(p*q):''}</div></div></div>`}
+function needStockMsg(card){toast('請先填寫「現有庫存」再叫貨',3000);const k=card&&card.querySelector('.sk');if(k){k.focus();k.closest('.stk').classList.add('need')}}
 function setQty(id,q,card){
-  q=Math.max(0,Math.floor(+q||0));if(q)S.qty[id]=q;else delete S.qty[id];save();
-  if(card){const i=byId(id);card.classList.toggle('on',q>0);card.querySelector('input').value=q||'';card.querySelector('.lt').textContent=q?money(price(i)*q):''}
+  q=Math.max(0,Math.floor(+q||0));
+  if(q>0&&needStock()&&!hasStock(id)){needStockMsg(card);return}
+  if(q)S.qty[id]=q;else delete S.qty[id];save();
+  if(card){const i=byId(id);card.classList.toggle('on',q>0);card.querySelector('.step input').value=q||'';card.querySelector('.lt').textContent=q?money(price(i)*q):''}
   updateBar();
   if(ui.view==='order'){const l=vis();SHEETS.forEach(s=>{const n=l.filter(i=>i.sheet===s&&(+S.qty[i.id]||0)>0).length;const b=document.querySelector(`#seg [data-s="${s}"] .c`);if(b)b.textContent=n||''})}}
 function vCart(){
@@ -351,7 +363,7 @@ function vCart(){
   const all=L.reduce((a,x)=>a+x.p*x.q,0);
   $('#main').innerHTML=`<section class="card pad"><div class="hint">${esc(S.store.name||'（尚未填門市名稱）')}${S.store.tables||S.store.people?'・'+esc(S.store.tables||'-')+' 桌／'+esc(S.store.people||'-')+' 人':''}</div><div style="font-size:1.4rem;font-weight:700" class="num">${money(all)}</div><div class="hint">${L.length} 項・${Object.keys(g).length} 家廠商</div></section>
   ${Object.entries(g).map(([v,a])=>{const sub=a.reduce((s,x)=>s+x.p*x.q,0);return `<section class="card"><div class="vh"><b>${esc(v)}</b><span class="hint num">${a.length} 項・${money(sub)}</span><span class="sp"></span><button class="btn sm" data-copyv="${esc(v)}">複製此廠商</button></div>
-   ${a.map(x=>`<div class="item" data-id="${esc(x.id)}">${thumbHTML(byId(x.id)||{id:x.id,name:x.name})}<div style="min-width:0"><div class="nm">${esc(x.name)}</div><div class="meta">${esc(x.spec)}${x.spec?'・':''}${x.sheet}・單價 <span class="num">${money(x.p)}</span></div></div>
+   ${a.map(x=>`<div class="item" data-id="${esc(x.id)}">${thumbHTML(byId(x.id)||{id:x.id,name:x.name})}<div style="min-width:0"><div class="nm">${esc(x.name)}</div><div class="meta">${esc(x.spec)}${x.spec?'・':''}${x.sheet}・單價 <span class="num">${money(x.p)}</span></div>${stk(x)!==null?`<div class="meta">現有庫存 <b class="num">${stk(x)}</b>${x.q>0?'・叫貨 <b class="num">'+x.q+'</b>':''}</div>`:''}</div>
    <div class="right"><div class="step"><button data-d="-1" aria-label="減少">−</button><input inputmode="numeric" type="number" min="0" value="${x.q}" aria-label="數量"><button data-d="1" aria-label="增加">+</button></div><div class="lt">${money(x.p*x.q)}</div></div></div>`).join('')}</section>`}).join('')}
   <section class="card pad"><label class="f">備註（給廠商或總部的話）<textarea class="input" id="note" rows="3">${esc(S.note)}</textarea></label></section>
   <section class="card pad"><div class="row"><button class="btn ${DB?'':'primary'}" id="cpAll">複製叫貨單文字</button><button class="btn" id="cpSheet">複製表格（貼到 Excel）</button><button class="btn ${DB?'primary':''}" id="saveOrd">${DB?'送出叫貨單給總部':'儲存到紀錄並清空'}</button></div>
@@ -366,17 +378,18 @@ function sortOrders(a){const td=todayStr(),k=o=>(o.store&&o.store.date)||'';
   return [...a].sort((x,y)=>{const gx=g(x),gy=g(y);if(gx!==gy)return gx-gy;
     if(gx===0)return k(x)<k(y)?-1:k(x)>k(y)?1:y.ts-x.ts;
     if(gx===1)return k(x)<k(y)?1:k(x)>k(y)?-1:y.ts-x.ts;return y.ts-x.ts})}
+const hMatch=o=>{const q=(ui.hq||'').trim().toLowerCase();if(!q)return true;const s=o.store||{};return [s.name,s.title,s.person,s.address].join(' ').toLowerCase().includes(q)};
 function vHistory(){
-  const h=sortOrders(histList()),pend=h.filter(o=>o.status==='待處理').length;
+  const all=histList(),h=sortOrders(all.filter(hMatch)),pend=h.filter(o=>o.status==='待處理').length;
   const loc=DB&&S.history.length?`<section class="card pad"><b>這台裝置有 ${S.history.length} 筆本機舊紀錄</b><p class="hint" style="margin:4px 0 8px">${CAN_ADMIN?'按下後上傳到雲端，所有人都看得到；上傳完成會清除本機舊紀錄。':'請總部登入後上傳。'}</p>${CAN_ADMIN?'<button class="btn primary" id="upLocal">上傳舊紀錄到雲端</button>':''}</section>`:'';
-  const head=`<section class="card pad"><div class="row"><b>${DB?'各店送出的叫貨單':'叫貨紀錄'}</b><span class="sp"></span><span class="hint">共 ${h.length} 張${pend?'・待處理 '+pend+' 張':''}</span></div><div class="chips" style="margin-top:8px" id="sortc"><button data-sort="date" aria-pressed="${ui.sort==='date'}">依到貨日（最近優先）</button><button data-sort="ts" aria-pressed="${ui.sort==='ts'}">依叫貨時間（新→舊）</button></div></section>`+loc;
+  const head=`<section class="card pad"><div class="row"><b>${DB?'各店送出的叫貨單':'叫貨紀錄'}</b><span class="sp"></span><span class="hint">${ui.hq?`符合 ${h.length} 張／共 ${all.length} 張`:`共 ${h.length} 張`}${pend?'・待處理 '+pend+' 張':''}</span></div><input class="input" id="hq" type="search" placeholder="搜尋門市名稱（例如：新竹、秀泰）" value="${esc(ui.hq||'')}" autocomplete="off" style="margin-top:8px"><div class="chips" style="margin-top:8px" id="sortc"><button data-sort="date" aria-pressed="${ui.sort==='date'}">依到貨日（最近優先）</button><button data-sort="ts" aria-pressed="${ui.sort==='ts'}">依叫貨時間（新→舊）</button></div></section>`+loc;
   $('#main').innerHTML=head+(h.length?h.map(o=>`<section class="card pad" data-h="${esc(o.id)}"><div class="row"><b>${esc(o.store.name||'（未填門市）')}</b>${o.status?`<span class="${o.status==='已處理'?'pill-ok':'tag'}" style="${o.status==='待處理'?'background:var(--accent-soft);color:var(--accent)':''}">${esc(o.status)}</span>`:''}<span class="sp"></span><b class="num">${money(o.total)}</b></div>
    <div class="hint">叫貨時間：${new Date(o.ts).toLocaleString('zh-TW',{hour12:false})}</div>
    ${(()=>{const d=dayInfo(o.store.date);return d?`<div style="margin-top:3px"><b>期望到貨：${d.text}</b>${o.status!=='已處理'?` <span class="tag" style="${d.diff<0?'background:var(--accent-soft);color:var(--accent)':''}">${d.rel}</span>`:''}</div>`:'<div class="hint">期望到貨：未填</div>'})()}
    <div class="hint">${o.lines.length} 項・${new Set(o.lines.map(x=>x.vendor)).size} 家廠商${o.store.person?'・'+esc(o.store.person):''}${o.store.tables||o.store.people?'・'+esc(o.store.tables||'-')+' 桌／'+esc(o.store.people||'-')+' 人':''}</div>
-   <details style="margin-top:8px"><summary class="hint">明細</summary><div class="meta" style="margin-top:6px">${o.lines.map(x=>`${esc(x.vendor)}｜${esc(x.name)}${x.spec?'（'+esc(x.spec)+'）':''} ×${x.q}`).join('<br>')}</div></details>
+   <details style="margin-top:8px"><summary class="hint">明細</summary><div class="meta" style="margin-top:6px">${o.lines.map(x=>`${esc(x.vendor)}｜${esc(x.name)}${x.spec?'（'+esc(x.spec)+'）':''} ×${x.q}${stk(x)!==null?'　<b>庫存 '+stk(x)+'</b>':''}`).join('<br>')}</div></details>
    <div class="row" style="margin-top:10px"><button class="btn sm" data-act="cp">複製文字</button><button class="btn sm" data-act="re">載入到叫貨單</button>${CAN_ADMIN||!DB?'<button class="btn sm" data-act="ed">修改內容</button>':''}${CAN_ADMIN||!DB?'<button class="btn sm" data-act="xl">下載 Excel</button>':''}${DB&&CAN_ADMIN?`<button class="btn sm" data-act="st">${o.status==='已處理'?'改回待處理':'標示已處理'}</button>`:''}${!DB||CAN_ADMIN?'<button class="btn sm danger" data-act="del">刪除</button>':''}</div></section>`).join('')
-   :`<div class="card empty">還沒有叫貨單。<br>在「叫貨單」按「${DB?'送出叫貨單給總部':'儲存到紀錄並清空'}」後會出現在這裡。</div>`)}
+   :ui.hq?`<div class="card empty">找不到符合「${esc(ui.hq)}」的叫貨單。</div>`:`<div class="card empty">還沒有叫貨單。<br>在「叫貨單」按「${DB?'送出叫貨單給總部':'儲存到紀錄並清空'}」後會出現在這裡。</div>`)}
 function iRow(i){return `<div class="item" data-iid="${esc(i.id)}" style="${i.active===false?'opacity:.55':''}">${thumbHTML(i)}
   <div style="min-width:0"><div class="nm">${esc(i.name)}</div><div class="meta">${esc(i.spec)}${i.spec?'・':''}${esc(i.vendor)}${i.active===false?'・已停用':''}</div><div style="margin-top:4px"><button class="btn sm" data-edit="${esc(i.id)}">編輯</button> <label class="hint" style="white-space:nowrap;margin-left:6px"><input type="checkbox" class="sok" ${i.storeOk===false?'':'checked'}> 門市可叫貨</label></div></div>
   <label class="f" style="width:88px">單價<input class="input pin num" type="number" min="0" step="any" inputmode="decimal" value="${price(i)}"></label></div>`}
@@ -514,14 +527,14 @@ async function exportOrder(o){
     const rows=[{cells:[{v:`金春喜韓廚 叫貨單${st.name?'－'+st.name:''}`,s:4}],h:26}];
     info.forEach(x=>rows.push({cells:[{v:x[0],s:1},{v:x[1],s:2},{v:'',s:2}]}));
     rows.push({cells:[]});
-    const hdr=rows.length;rows.push({h:24,cells:H('廠商','照片','類別','品名','規格','單價','數量','小計')});
+    const hdr=rows.length;rows.push({h:24,cells:H('廠商','照片','類別','品名','規格','現有庫存','單價','數量','小計')});
     const first=rows.length+1;
-    L.forEach(x=>{const r=rows.length+1,it=byId(x.id);rows.push({h:50,img:it&&it.img||null,imgCol:1,cells:[{v:x.vendor,s:7},{v:'',s:2},{v:x.sheet,s:7},x.name,x.spec,{v:x.p,s:3},{v:x.q,s:3},{v:x.p*x.q,s:3,f:`F${r}*G${r}`}]})});
+    L.forEach(x=>{const r=rows.length+1,it=byId(x.id);rows.push({h:50,img:it&&it.img||null,imgCol:1,cells:[{v:x.vendor,s:7},{v:'',s:2},{v:x.sheet,s:7},x.name,x.spec,{v:stk(x)===null?'':stk(x),s:3},{v:x.p,s:3},{v:x.q,s:3},{v:x.p*x.q,s:3,f:`G${r}*H${r}`}]})});
     const last=rows.length;
-    rows.push({h:24,cells:[null,null,null,null,null,null,{v:'總計',s:6},{v:L.reduce((a,x)=>a+x.p*x.q,0),s:6,f:`SUM(H${first}:H${last})`}]});
+    rows.push({h:24,cells:[null,null,null,null,null,null,null,{v:'總計',s:6},{v:L.reduce((a,x)=>a+x.p*x.q,0),s:6,f:`SUM(I${first}:I${last})`}]});
     if(o.note)rows.push({cells:[{v:'備註：'+o.note,s:5}]});
-    const merges=['A1:H1'];info.forEach((x,k)=>merges.push(`B${k+2}:D${k+2}`));
-    saveBlob(await buildXlsx([{name:'叫貨單',widths:[11,11,8,34,24,10,8,12],freeze:hdr+1,rows,merges}]),`金春喜叫貨單_${(st.name||'未命名')}_${ymd(new Date(o.ts))}.xlsx`);toast('已下載叫貨單',2500);
+    const merges=['A1:I1'];info.forEach((x,k)=>merges.push(`B${k+2}:D${k+2}`));
+    saveBlob(await buildXlsx([{name:'叫貨單',widths:[11,11,8,34,24,10,10,8,12],freeze:hdr+1,rows,merges}]),`金春喜叫貨單_${(st.name||'未命名')}_${ymd(new Date(o.ts))}.xlsx`);toast('已下載叫貨單',2500);
   }catch(e){toast('產生 Excel 失敗：'+(e&&e.message||e),6000)}}
 
 
@@ -571,9 +584,10 @@ function orderEditor(o){
       ${fld('address','地址',1)}${fld('tables','桌數')}${fld('people','人數（座位數）')}${fld('person','叫貨人')}
       <label class="f">期望到貨日<input class="input" type="date" data-ok="date" value="${esc(st.date)}"></label>
       <label class="f" style="grid-column:1/-1">備註<input class="input" id="oeNote" value="${esc(note)}"></label></div>
-     <div style="overflow-x:auto"><table class="oe" style="width:100%;border-collapse:collapse;font-size:.9rem;min-width:560px">
-      <thead><tr style="text-align:left;color:var(--muted)"><th>品項</th><th style="width:88px">單價</th><th style="width:78px">數量</th><th style="width:96px;text-align:right">小計</th><th style="width:40px"></th></tr></thead>
+     <div style="overflow-x:auto"><table class="oe" style="width:100%;border-collapse:collapse;font-size:.9rem;min-width:640px">
+      <thead><tr style="text-align:left;color:var(--muted)"><th>品項</th><th style="width:78px">現有庫存</th><th style="width:88px">單價</th><th style="width:78px">數量</th><th style="width:96px;text-align:right">小計</th><th style="width:40px"></th></tr></thead>
       <tbody>${L.map((x,i)=>`<tr style="border-top:1px solid var(--line)"><td style="padding:6px 6px 6px 0"><b>${esc(x.name)}</b><div class="hint">${esc(x.vendor)}${x.spec?'・'+esc(x.spec):''}</div></td>
+       <td><input class="input" data-ls="${i}" type="number" min="0" step="1" value="${stk(x)===null?'':stk(x)}" style="width:70px"></td>
        <td><input class="input" data-lp="${i}" type="number" step="any" min="0" value="${x.p}" style="width:80px"></td>
        <td><input class="input" data-lq="${i}" type="number" min="1" step="1" value="${x.q}" style="width:70px"></td>
        <td style="text-align:right" class="num">${money((+x.p||0)*(+x.q||0))}</td><td><button class="btn sm" type="button" data-ldel="${i}" title="移除此品項">✕</button></td></tr>`).join('')}</tbody></table></div>
@@ -588,7 +602,7 @@ function orderEditor(o){
     const d=t.closest('[data-ldel]');if(d){grab();L.splice(+d.dataset.ldel,1);paint(1);return}
     if(t.id==='oeSave'){grab();
       if(!st.name){toast('請填分店名稱');return}
-      const lines=L.filter(x=>Math.floor(+x.q)>0&&+x.p>=0).map(x=>({id:x.id,sheet:x.sheet,vendor:x.vendor,name:x.name,spec:x.spec,q:Math.floor(+x.q),p:+x.p}));
+      const lines=L.filter(x=>Math.floor(+x.q)>0&&+x.p>=0).map(x=>({id:x.id,sheet:x.sheet,vendor:x.vendor,name:x.name,spec:x.spec,q:Math.floor(+x.q),p:+x.p,s:stk(x)===null?null:+stk(x)}));
       if(!lines.length){toast('至少要有一個品項');return}
       t.disabled=true;
       const total=lines.reduce((a,x)=>a+x.p*x.q,0);
@@ -596,6 +610,7 @@ function orderEditor(o){
       else{Object.assign(o,{store:st,note,lines,total});save();lsSave();lay.innerHTML='';toast('已修改');vHistory()}}};
   lay.onchange=e=>{const t=e.target;if(busy)return;
     if(t.dataset.lp!==undefined){grab();L[+t.dataset.lp].p=Math.max(0,+t.value||0);paint(1)}
+    else if(t.dataset.ls!==undefined){grab();L[+t.dataset.ls].s=t.value===''?null:Math.max(0,Math.floor(+t.value)||0);paint(1)}
     else if(t.dataset.lq!==undefined){grab();L[+t.dataset.lq].q=Math.max(1,Math.floor(+t.value)||1);paint(1)}
     else if(t.id==='oeAdd'){const v=t.value,it=ITEMS.find(i=>i.name+(i.spec?'｜'+i.spec:'')+'｜'+i.vendor===v);
       if(it){grab();const ex=L.find(x=>x.id===it.id);if(ex)ex.q=(+ex.q||0)+1;else L.push({id:it.id,sheet:it.sheet,vendor:it.vendor,name:it.name,spec:it.spec,q:1,p:price(it)});paint(1);const a=$('#oeAdd');if(a)a.focus()}}}}
@@ -611,16 +626,17 @@ document.addEventListener('click',e=>{
   const ig=t.closest('#iseg button');if(ig){ui.isheet=ig.dataset.s;vItems();return}
   const vc=t.closest('#vchips button');if(vc){if(vc.id==='onlySel')ui.onlySel=!ui.onlySel;else ui.vendor=vc.dataset.v;vOrder();return}
   const z=t.closest('[data-zoom]');if(z){const i=byId(z.dataset.zoom);if(!i||!imgSrc(i))return;$('#layer').innerHTML=`<div class="lb" id="lb"><div><img alt="" src="${esc(imgSrc(i))}"><p>${esc(i.name)} ${esc(i.spec)}</p></div></div>`;$('#lb').onclick=()=>$('#layer').innerHTML='';return}
-  const st=t.closest('.step button');if(st){const card=st.closest('.item');const inp=card.querySelector('input');setQty(card.dataset.id,(+inp.value||0)+ +st.dataset.d,card);if(ui.view==='cart')vCart();return}
-  if(t.id==='applyTpl'){const n=vis().filter(i=>i.sheet===ui.sheet&&i.sug>0);n.forEach(i=>{S.qty[i.id]=i.sug});save();vOrder();toast(`已帶入${ui.sheet} ${n.length} 項的建議數量`);return}
-  if(t.id==='clearAll'){if(t.dataset.arm){S.qty={};save();vOrder();toast('已清空');return}t.dataset.arm=1;t.textContent='再按一次確認清空';setTimeout(()=>{if(t.isConnected){delete t.dataset.arm;t.textContent='清空數量'}},2500);return}
+  const st=t.closest('.step button');if(st){const card=st.closest('.item');const inp=card.querySelector('.step input');setQty(card.dataset.id,(+inp.value||0)+ +st.dataset.d,card);if(ui.view==='cart')vCart();return}
+  if(t.id==='applyTpl'){const n=vis().filter(i=>i.sheet===ui.sheet&&i.sug>0&&(!needStock()||hasStock(i.id)));if(!n.length){toast(needStock()?'請先填寫各品項的現有庫存，才能帶入建議數量':'這個分頁沒有建議數量',3500);return}
+    n.forEach(i=>{S.qty[i.id]=i.sug});save();vOrder();toast(`已帶入${ui.sheet} ${n.length} 項的建議數量`);return}
+  if(t.id==='clearAll'){if(t.dataset.arm){S.qty={};S.stock={};save();vOrder();toast('已清空');return}t.dataset.arm=1;t.textContent='再按一次確認清空';setTimeout(()=>{if(t.isConnected){delete t.dataset.arm;t.textContent='清空數量'}},2500);return}
   if(t.id==='cpAll'){copy(orderText(lines(),meta()),'叫貨單已複製');return}
   if(t.id==='cpSheet'){copy(sheetText(lines()),'表格已複製');return}
   const cv=t.closest('[data-copyv]');if(cv){copy(orderText(lines().filter(x=>x.vendor===cv.dataset.copyv),meta(),cv.dataset.copyv),'已複製 '+cv.dataset.copyv);return}
   if(t.id==='saveOrd'){submitOrder();return}
   const ha=t.closest('[data-act]');if(ha){const card=ha.closest('[data-h]');const o=histList().find(x=>String(x.id)===card.dataset.h);if(!o)return;
     if(ha.dataset.act==='cp')copy(orderText(o.lines,{...o.store,note:o.note}),'已複製');
-    if(ha.dataset.act==='re'){S.store={...S.store,...o.store};S.qty={};o.lines.forEach(x=>{if(byId(x.id))S.qty[x.id]=x.q});S.note=o.note||'';save();toast('已載入');setView('cart')}
+    if(ha.dataset.act==='re'){S.store={...S.store,...o.store};S.qty={};S.stock={};o.lines.forEach(x=>{if(byId(x.id)){S.qty[x.id]=x.q;if(stk(x)!==null)S.stock[x.id]=stk(x)}});S.note=o.note||'';save();toast('已載入');setView('cart')}
     if(ha.dataset.act==='xl')exportOrder(o);
     if(ha.dataset.act==='ed'){orderEditor(o);return}
     if(ha.dataset.act==='st'){toggleStatus(o)}
@@ -665,8 +681,11 @@ document.addEventListener('click',e=>{
     }catch(e){toast(explain(e,'匯入品項'),9000)}finally{t.disabled=false;t.textContent='匯入初始品項';delete t.dataset.arm}})();
     return}
 });
+const hqRun=t=>{ui.hq=t.value;const p=t.selectionStart;vHistory();const n=$('#hq');if(n){n.focus();try{n.setSelectionRange(p,p)}catch(e){}}};
+document.addEventListener('compositionend',e=>{if(e.target&&e.target.id==='hq')hqRun(e.target)});
 document.addEventListener('input',e=>{
   const t=e.target,S_=S.store;
+  if(t.id==='hq'){if(e.isComposing)return;hqRun(t);return}
   if(t.id==='q'){ui.q=t.value;drawList()}
   else if(t.id==='zone'){ui.zone=t.value;drawList()}
   else if(t.id==='iq'){ui.iq=t.value;const a=iList();$('#ilist').innerHTML=a.length?a.map(iRow).join(''):'<div class="empty">沒有符合的品項</div>'}
@@ -680,6 +699,10 @@ document.addEventListener('input',e=>{
   else if(t.id==='stTables'){S_.tables=t.value;save()}
   else if(t.id==='stPeople'){S_.people=t.value;save()}
   else if(t.id==='note'){S.note=t.value;save()}
+  else if(t.classList.contains('sk')){const card=t.closest('.item'),id=card.dataset.id;
+    if(t.value===''){delete S.stock[id];if(needStock()&&S.qty[id]){setQty(id,0,card)}}else S.stock[id]=Math.max(0,Math.floor(+t.value)||0);
+    save();t.closest('.stk').classList.toggle('need',needStock()&&!hasStock(id))}
+  else if(t.closest('.step')&&t.tagName==='INPUT'&&ui.view==='order'&&Math.floor(+t.value||0)>0&&needStock()&&!hasStock(t.closest('.item').dataset.id)){t.value='';needStockMsg(t.closest('.item'))}
   else if(t.closest('.step')&&t.tagName==='INPUT'){const card=t.closest('.item');const q=Math.max(0,Math.floor(+t.value||0));if(q)S.qty[card.dataset.id]=q;else delete S.qty[card.dataset.id];save();card.classList.toggle('on',q>0);card.querySelector('.lt').textContent=q?money(price(byId(card.dataset.id))*q):'';updateBar()}
 });
 document.addEventListener('change',e=>{
